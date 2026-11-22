@@ -81,7 +81,7 @@
       .map(item => item.index);
     // The first full-width rule is normally the table's top edge; the next
     // one closes the header and marks the first body row.
-    const bodyStartIndex = fullWidthRuleIndices.length >= 2 ? fullWidthRuleIndices[1] : 0;
+    const bodyStartIndex = fullWidthRuleIndices.length >= 1 ? fullWidthRuleIndices[0] : 0;
     return { xs, ys, bodyStartIndex, width, height };
   }
 
