@@ -43,6 +43,11 @@ button:disabled{opacity:.48;cursor:wait}
 #status{font-size:12px;color:#777;margin-top:12px;min-height:18px}
 progress{width:100%;height:6px;margin-top:8px;accent-color:#333}
 textarea{min-height:230px;resize:vertical;line-height:1.7}
+#table-preview{margin-top:12px;overflow-x:auto}
+#table-preview[hidden]{display:none}
+#table-preview table{width:100%;border-collapse:collapse;font-size:13px}
+#table-preview th,#table-preview td{border:1px solid #d7d9dd;padding:8px;text-align:left;white-space:pre-wrap;min-width:72px}
+#table-preview th{background:#f3f4f6;font-weight:700}
 .actions{display:flex;gap:9px;margin-top:10px;flex-wrap:wrap}
 .actions button{flex:1 1 calc(50% - 9px);height:43px;border:1px solid #dfe1e5;border-radius:8px;background:#fff;color:#333;font-size:13px;font-weight:700}
 .actions button:hover:not(:disabled){background:#f5f5f6}
@@ -84,6 +89,7 @@ footer p{font-size:11px;color:#9a9ca1;line-height:1.6}
 <div class="section-head"><span class="step">2</span><h2 id="result-title">텍스트 결과</h2></div>
 <label for="output">인식된 문자</label>
 <textarea id="output" placeholder="추출된 문자가 여기에 표시됩니다. 필요하면 직접 수정할 수 있습니다."></textarea>
+<div id="table-preview" hidden aria-label="표 미리보기"></div>
 <div class="actions">
 <button id="copy" class="secondary" type="button">복사</button>
 <button id="table" class="secondary" type="button">표 형태로 추출</button>
@@ -264,6 +270,8 @@ $("run").addEventListener("click", async () => {
     const result = await worker.recognize(ocrImage);
     lastOcrData = result.data;
     $("output").value = formatOcrLayout(result.data) || "인식된 문자가 없습니다. 더 선명한 이미지로 다시 시도해 주세요.";
+    $("table-preview").hidden = true;
+    $("table-preview").replaceChildren();
     $("progress").value = 1;
     $("status").textContent = "문자 추출이 끝났습니다.";
   } catch (error) {
@@ -301,6 +309,34 @@ $("copy").addEventListener("click", async () => {
   }
 });
 
+function renderTablePreview(value) {
+  const container = $("table-preview");
+  const rows = value.split("\n").map(row => row.split("\t"));
+  if (!value.includes("\t")) {
+    container.hidden = true;
+    container.replaceChildren();
+    return;
+  }
+  const table = document.createElement("table");
+  const body = document.createElement("tbody");
+  rows.forEach((row, rowIndex) => {
+    const tr = document.createElement("tr");
+    row.forEach(cell => {
+      const element = document.createElement(rowIndex === 0 ? "th" : "td");
+      element.textContent = cell;
+      tr.appendChild(element);
+    });
+    body.appendChild(tr);
+  });
+  table.appendChild(body);
+  container.replaceChildren(table);
+  container.hidden = false;
+}
+
+$("output").addEventListener("input", () => {
+  if (!$("table-preview").hidden) renderTablePreview($("output").value);
+});
+
 function extractTableText(data) {
   const words = Array.isArray(data && data.words)
     ? data.words.filter(word => word.text && word.bbox &&
@@ -329,33 +365,54 @@ function extractTableText(data) {
       sum + (item.bbox.y0 + item.bbox.y1) / 2, 0) / row.words.length;
   }
 
-  const outputRows = rows.sort((a, b) => a.centerY - b.centerY).map(row => {
+  const cellRows = rows.sort((a, b) => a.centerY - b.centerY).map(row => {
     const lineWords = row.words.sort((a, b) => a.bbox.x0 - b.bbox.x0);
-    const cells = [];
-    let current = "";
-    let previousRight = null;
-    const widths = lineWords.map(word => Math.max(1, word.bbox.x1 - word.bbox.x0));
-    const typicalWidth = widths.sort((a, b) => a - b)[Math.floor(widths.length / 2)];
+    const widths = lineWords.map(word => Math.max(1, word.bbox.x1 - word.bbox.x0)).sort((a, b) => a - b);
+    const typicalWidth = widths[Math.floor(widths.length / 2)];
     const gapThreshold = Math.max(medianHeight * 1.15, typicalWidth * 1.4);
+    const cells = [];
+    let current = null;
     for (const word of lineWords) {
-      const gap = previousRight === null ? 0 : word.bbox.x0 - previousRight;
-      if (current && gap > gapThreshold) {
-        cells.push(current.trim());
-        current = "";
+      const gap = current ? word.bbox.x0 - current.right : 0;
+      if (!current || gap > gapThreshold) {
+        if (current) cells.push(current);
+        current = { text: word.text, x: word.bbox.x0, right: word.bbox.x1 };
+      } else {
+        current.text += " " + word.text;
+        current.right = word.bbox.x1;
       }
-      current += (current ? " " : "") + word.text;
-      previousRight = word.bbox.x1;
     }
-    if (current) cells.push(current.trim());
+    if (current) cells.push(current);
     return cells;
   });
 
-  const columnCount = Math.max(...outputRows.map(row => row.length));
-  if (columnCount < 2) return "";
-  return outputRows.map(row =>
-    Array.from({ length: columnCount }, (_, index) => (row[index] || "").replace(/\t/g, " "))
-      .join("\t")
-  ).join("\n");
+  // 모든 행의 셀 시작 위치를 함께 분석해 열 위치를 정렬합니다.
+  const starts = cellRows.flat().map(cell => cell.x).sort((a, b) => a - b);
+  const tolerance = Math.max(medianHeight * 2.2, 12);
+  const columns = [];
+  for (const x of starts) {
+    const last = columns[columns.length - 1];
+    if (!last || x - last.center > tolerance) {
+      columns.push({ center: x, count: 1 });
+    } else {
+      last.center = (last.center * last.count + x) / (last.count + 1);
+      last.count += 1;
+    }
+  }
+  if (columns.length < 2) return "";
+
+  const alignedRows = cellRows.map(cells => {
+    const output = Array(columns.length).fill("");
+    for (const cell of cells) {
+      let nearest = 0;
+      for (let index = 1; index < columns.length; index++) {
+        if (Math.abs(columns[index].center - cell.x) < Math.abs(columns[nearest].center - cell.x)) nearest = index;
+      }
+      output[nearest] = output[nearest] ? output[nearest] + " " + cell.text : cell.text;
+    }
+    return output;
+  });
+  return alignedRows.map(row => row.map(cell => cell.replace(/\t/g, " ")).join("\t")).join("\n");
 }
 
 $("table").addEventListener("click", () => {
@@ -369,7 +426,8 @@ $("table").addEventListener("click", () => {
     return;
   }
   $("output").value = tableText;
-  $("status").textContent = "표 형태로 변환했습니다. 열 구분은 글자 위치를 이용한 자동 추정이므로 결과를 확인해 주세요.";
+  renderTablePreview(tableText);
+  $("status").textContent = "표 형태로 변환했습니다. 열 위치를 자동 추정했으므로 미리보기를 확인하고 필요하면 결과를 수정해 주세요.";
 });
 
 $("pdf").addEventListener("click", () => {
