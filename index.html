@@ -352,23 +352,32 @@ function extractTableText(data) {
     a.bbox.x0 - b.bbox.x0
   );
 
-  // 단순 중심점 비교 대신 세로 영역의 겹침을 기준으로 같은 글줄을 묶습니다.
+  // 글자 높이와 실제 세로 간격을 이용해 행 수를 자동으로 결정합니다.
+  // 작은 글씨와 큰 제목이 섞여 있어도 행 간격이 넓으면 별도 행으로 분리합니다.
   const rows = [];
   for (const word of sorted) {
     const centerY = (word.bbox.y0 + word.bbox.y1) / 2;
+    const wordHeight = Math.max(1, word.bbox.y1 - word.bbox.y0);
     let bestRow = null;
-    let bestOverlap = 0;
+    let bestScore = -Infinity;
+
     for (const candidate of rows) {
       const overlap = Math.max(0, Math.min(candidate.bottom, word.bbox.y1) - Math.max(candidate.top, word.bbox.y0));
-      const ratio = overlap / Math.max(1, Math.min(candidate.bottom - candidate.top, word.bbox.y1 - word.bbox.y0));
+      const smallerHeight = Math.max(1, Math.min(candidate.bottom - candidate.top, wordHeight));
+      const overlapRatio = overlap / smallerHeight;
       const centerDistance = Math.abs(candidate.centerY - centerY);
-      if (ratio >= 0.35 && ratio > bestOverlap) {
-        bestOverlap = ratio;
-        bestRow = candidate;
-      } else if (!bestRow && centerDistance <= medianHeight * 0.48) {
-        bestRow = candidate;
+      const allowedDistance = Math.max(medianHeight * 0.34, Math.min(wordHeight, candidate.bottom - candidate.top) * 0.38);
+
+      // 세로 영역이 충분히 겹치거나, 중심점이 해당 행의 허용 범위 안에 있을 때만 같은 행으로 처리합니다.
+      if (overlapRatio >= 0.28 || centerDistance <= allowedDistance) {
+        const score = overlapRatio * 2 - centerDistance / Math.max(1, medianHeight);
+        if (score > bestScore) {
+          bestScore = score;
+          bestRow = candidate;
+        }
       }
     }
+
     if (!bestRow) {
       bestRow = { top: word.bbox.y0, bottom: word.bbox.y1, centerY, words: [] };
       rows.push(bestRow);
@@ -376,7 +385,8 @@ function extractTableText(data) {
     bestRow.words.push(word);
     bestRow.top = Math.min(bestRow.top, word.bbox.y0);
     bestRow.bottom = Math.max(bestRow.bottom, word.bbox.y1);
-    bestRow.centerY = (bestRow.top + bestRow.bottom) / 2;
+    bestRow.centerY = bestRow.words.reduce((sum, item) =>
+      sum + (item.bbox.y0 + item.bbox.y1) / 2, 0) / bestRow.words.length;
   }
 
   const cellRows = rows.sort((a, b) => a.centerY - b.centerY).map(row => {
@@ -442,7 +452,7 @@ $("table").addEventListener("click", () => {
   }
   $("output").value = tableText;
   renderTablePreview(tableText);
-  $("status").textContent = "표 형태로 변환했습니다. 열 위치를 자동 추정했으므로 미리보기를 확인하고 필요하면 결과를 수정해 주세요.";
+  $("status").textContent = `표 형태로 변환했습니다. 글자 높이와 세로 간격을 분석해 ${tableText.split("\\n").length}개 행을 자동으로 구성했습니다. 열 위치도 자동 추정했으므로 미리보기를 확인해 주세요.`;
 });
 
 $("pdf").addEventListener("click", () => {
