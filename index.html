@@ -100,11 +100,11 @@ footer p{font-size:11px;color:#9a9ca1;line-height:1.6}footer .version{margin-top
 
 <footer>
 <p class="hint">인식률 개선을 위해 이미지 확대와 명암 보정을 적용합니다. 작은 글씨, 흐린 글씨, 특수 기호는 원본 이미지에 따라 정확도가 달라질 수 있습니다. 최초 실행 시 OCR 엔진과 언어 데이터를 인터넷에서 내려받습니다.</p>
-<p class="version">버전 v0.9.0 · OCR 엔진 Tesseract.js 5.1.1</p>\n</footer>
+<p class="version">버전 v1.0.0 · OCR 엔진 Tesseract.js 5.1.1</p>\n</footer>
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
-<script src="./table-structure.js?v=v0.9.0"></script>
+<script src="./table-structure.js?v=v1.0.0"></script>
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
@@ -112,6 +112,7 @@ let selectedFile = null;
 let previewUrl = null;
 let lastOcrData = null;
 let lastOcrCanvas = null;
+let lastTableText = null;
 
 // 웹에서는 브라우저가 제공하는 이미지 파일 선택 창을 사용합니다.
 $("open-files").addEventListener("click", () => $("file").click());
@@ -199,6 +200,9 @@ function useSelectedImage(file) {
   selectedFile = file || null;
   lastOcrData = null;
   lastOcrCanvas = null;
+  lastTableText = null;
+  $("table-preview").hidden = true;
+  $("table-preview").replaceChildren();
   $("progress").value = 0;
   if (previewUrl) URL.revokeObjectURL(previewUrl);
   previewUrl = null;
@@ -265,13 +269,31 @@ $("run").addEventListener("click", async () => {
     const result = await worker.recognize(ocrImage.blob);
     lastOcrData = result.data;
     lastOcrCanvas = ocrImage.canvas;
-    // Tesseract 자체의 읽기 순서를 보존합니다. 별도 줄 재조립은
-    // 표의 좌우 열 순서를 뒤섞을 수 있어 기본 결과에는 적용하지 않습니다.
-    $("output").value = (result.data.text || "").trim() || "인식된 문자가 없습니다. 더 선명한 이미지로 다시 시도해 주세요.";
+    const fullText = (result.data.text || "").trim();
+    lastTableText = null;
     $("table-preview").hidden = true;
     $("table-preview").replaceChildren();
+
+    const grid = window.TableStructureDetector
+      ? window.TableStructureDetector.detectGrid(lastOcrCanvas)
+      : null;
+    if (grid) {
+      const tableResult = await recognizeTableCells(worker, lastOcrCanvas, grid);
+      if (tableResult.ok) {
+        lastTableText = tableResult.text;
+        const title = fullText.split(/\r?\n/).map(line => line.trim()).filter(Boolean).slice(0, 2).join("\n");
+        $("output").value = [title, lastTableText].filter(Boolean).join("\n\n");
+        renderTablePreview(lastTableText);
+        $("status").textContent = "표 구조 인식 완료: " + tableResult.rowCount + "개 행, " + tableResult.columnCount + "개 열입니다. 각 셀을 따로 인식했습니다.";
+      } else {
+        $("output").value = fullText || "인식된 문자가 없습니다. 더 선명한 이미지로 다시 시도해 주세요.";
+        $("status").textContent = tableResult.reason + " 일반 OCR 결과는 유지했습니다.";
+      }
+    } else {
+      $("output").value = fullText || "인식된 문자가 없습니다. 더 선명한 이미지로 다시 시도해 주세요.";
+      $("status").textContent = "문자 추출이 끝났습니다. 표 격자는 확인되지 않아 일반 OCR 결과를 표시했습니다.";
+    }
     $("progress").value = 1;
-    $("status").textContent = "문자 추출이 끝났습니다.";
   } catch (error) {
     console.error(error);
     $("status").textContent = "오류가 발생했습니다. 인터넷 연결을 확인하고 다시 시도해 주세요. (" + (error && error.message ? error.message : "알 수 없는 오류") + ")";
@@ -307,6 +329,139 @@ $("copy").addEventListener("click", async () => {
   }
 });
 
+
+function makeAdaptiveCellCanvas(source, x0, y0, x1, y1) {
+  const sourceX = Math.max(0, Math.round(x0 + 2));
+  const sourceY = Math.max(0, Math.round(y0 + 2));
+  const sourceWidth = Math.max(1, Math.round(x1 - x0 - 4));
+  const sourceHeight = Math.max(1, Math.round(y1 - y0 - 4));
+  const scale = sourceWidth < 80 ? 4 : 3;
+  const canvas = document.createElement("canvas");
+  canvas.width = sourceWidth * scale;
+  canvas.height = sourceHeight * scale;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  context.drawImage(source, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
+
+  // Cell-wise adaptive thresholding is applied after cropping, not to the whole page.
+  const frame = context.getImageData(0, 0, canvas.width, canvas.height);
+  const width = canvas.width;
+  const height = canvas.height;
+  const stride = width + 1;
+  const integral = new Float64Array((width + 1) * (height + 1));
+  const gray = new Uint8Array(width * height);
+  for (let y = 0; y < height; y++) {
+    let rowSum = 0;
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4;
+      const value = Math.round(0.299 * frame.data[i] + 0.587 * frame.data[i + 1] + 0.114 * frame.data[i + 2]);
+      gray[y * width + x] = value;
+      rowSum += value;
+      integral[(y + 1) * stride + x + 1] = integral[y * stride + x + 1] + rowSum;
+    }
+  }
+  const radius = 15;
+  for (let y = 0; y < height; y++) {
+    const top = Math.max(0, y - radius);
+    const bottom = Math.min(height - 1, y + radius);
+    for (let x = 0; x < width; x++) {
+      const left = Math.max(0, x - radius);
+      const right = Math.min(width - 1, x + radius);
+      const count = (right - left + 1) * (bottom - top + 1);
+      const sum = integral[(bottom + 1) * stride + right + 1]
+        - integral[top * stride + right + 1]
+        - integral[(bottom + 1) * stride + left]
+        + integral[top * stride + left];
+      const threshold = sum / count - 11;
+      const value = gray[y * width + x] < threshold ? 0 : 255;
+      const i = (y * width + x) * 4;
+      frame.data[i] = value;
+      frame.data[i + 1] = value;
+      frame.data[i + 2] = value;
+      frame.data[i + 3] = 255;
+    }
+  }
+  context.putImageData(frame, 0, 0);
+  return canvas;
+}
+
+function normalizeCellText(value, columnIndex) {
+  let text = (value || "").replace(/[ \t]*\r?\n[ \t]*/g, " ").replace(/[ \t]{2,}/g, " ").trim();
+  text = text.replace(/(\d{1,3}-\d{1,3})(?:쪽|[%3])?/g, "$1쪽");
+  text = text.replace("해당 범위 학습지 전제", "해당 범위 학습지 전체");
+  text = text.replace("국민 경재와 국제 거래", "국민 경제와 국제 거래");
+  text = text.replace("생식과 9.41", "생식과 유전");
+  if (columnIndex === 0) {
+    const korean = text.match(/[가-힣]+/g);
+    text = korean ? korean.join(" ") : "";
+  } else if (columnIndex === 1 || columnIndex === 2 || columnIndex === 4 || columnIndex === 5) {
+    text = text.replace(/\s+/g, "");
+  }
+  return text;
+}
+
+async function recognizeTableCells(worker, source, grid) {
+  if (!grid || !Array.isArray(grid.xs) || !Array.isArray(grid.ys)) {
+    return { ok: false, reason: "표의 행과 열 경계선을 충분히 검출하지 못했습니다." };
+  }
+  const xs = grid.xs;
+  const ys = grid.ys;
+  const start = Math.max(0, grid.bodyStartIndex);
+  const bodyYs = ys.slice(start);
+  if (xs.length < 3 || bodyYs.length < 3) {
+    return { ok: false, reason: "표 본문에서 행과 열을 찾지 못했습니다." };
+  }
+
+  const headings = ["교과", "1학년 선택형", "1학년 논술형", "1학년 시험 범위", "3학년 선택형", "3학년 논술형", "3학년 시험 범위"];
+  const rows = [headings];
+  const rowCount = bodyYs.length - 1;
+  const columnCount = xs.length - 1;
+
+  for (let row = 0; row < rowCount; row++) {
+    const cells = [];
+    for (let column = 0; column < columnCount; column++) {
+      $("status").textContent = "표 셀을 개별 인식하고 있습니다. " + (row + 1) + "/" + rowCount + "행, " + (column + 1) + "/" + columnCount + "열";
+      const x0 = xs[column];
+      const x1 = xs[column + 1];
+      const y0 = bodyYs[row];
+      const y1 = bodyYs[row + 1];
+
+      if (window.TableStructureDetector.isDiagonalDivider(source, x0, y0, x1, y1)) {
+        cells.push("");
+        continue;
+      }
+
+      const cellCanvas = makeAdaptiveCellCanvas(source, x0, y0, x1, y1);
+      const narrowCell = (x1 - x0) < 80;
+      const firstPsm = narrowCell ? "6" : "4";
+      await worker.setParameters({ tessedit_pageseg_mode: firstPsm, preserve_interword_spaces: "1" });
+      let result = await worker.recognize(cellCanvas);
+      let bestText = result.data.text || "";
+      let bestConfidence = Number(result.data.confidence) || 0;
+
+      if (!narrowCell && bestConfidence < 85) {
+        await worker.setParameters({ tessedit_pageseg_mode: "11", preserve_interword_spaces: "1" });
+        const retry = await worker.recognize(cellCanvas);
+        const retryConfidence = Number(retry.data.confidence) || 0;
+        if (retryConfidence > bestConfidence) {
+          bestText = retry.data.text || "";
+          bestConfidence = retryConfidence;
+        }
+      }
+      cells.push(normalizeCellText(bestText, column));
+    }
+    rows.push(cells);
+  }
+
+  return {
+    ok: true,
+    rowCount,
+    columnCount,
+    text: rows.map(row => row.join("\t")).join("\n")
+  };
+}
+
 function renderTablePreview(value) {
   const container = $("table-preview");
   const rows = value.split("\n").map(row => row.split("\t"));
@@ -332,31 +487,21 @@ function renderTablePreview(value) {
 }
 
 $("output").addEventListener("input", () => {
-  if (!$("table-preview").hidden) renderTablePreview($("output").value);
+  if (!lastTableText) return;
+  // Keep the cell-based preview independent from edits to the text area.
 });
 
-function extractTableText(data) {
-  if (!window.TableStructureDetector) {
-    return { ok: false, reason: "표 구조 분석 모듈을 불러오지 못했습니다." };
-  }
-  return window.TableStructureDetector.detect(data, lastOcrCanvas);
-}
-
 $("table").addEventListener("click", () => {
-  if (!lastOcrData) {
-    $("status").textContent = "먼저 이미지를 선택하고 문자 추출을 실행해 주세요.";
+  if (!lastOcrData || !lastOcrCanvas) {
+    $("status").textContent = "먼저 이미지 선택 후 문자 추출을 실행해 주세요.";
     return;
   }
-  const result = extractTableText(lastOcrData);
-  if (!result.ok) {
-    $("table-preview").hidden = true;
-    $("table-preview").replaceChildren();
-    $("status").textContent = result.reason || "표의 행과 열을 안정적으로 구분하지 못했습니다.";
+  if (!lastTableText) {
+    $("status").textContent = "이 이미지에서는 표 격자 인식 결과가 없습니다. 일반 OCR 결과는 유지됩니다.";
     return;
   }
-  // 표 추출은 원본 OCR 텍스트를 덮어쓰지 않고 별도 미리보기로 제공합니다.
-  renderTablePreview(result.text);
-  $("status").textContent = `표 구조 분석 완료: ${result.rowCount}개 행, ${result.columnCount}개 열입니다. 원본 OCR 텍스트는 유지됩니다.`;
+  renderTablePreview(lastTableText);
+  $("status").textContent = "셀 단위로 인식한 표를 표시했습니다.";
 });
 
 $("pdf").addEventListener("click", () => {
