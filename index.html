@@ -280,7 +280,7 @@ $("run").addEventListener("click", async () => {
       ? window.TableStructureDetector.detectGrid(lastOcrCanvas)
       : null;
     if (grid) {
-      const tableResult = await recognizeTableCells(worker, lastOcrCanvas, grid, fullText);
+      const tableResult = await recognizeTableCells(worker, lastOcrCanvas, grid, fullText, result.data);
       if (tableResult.ok) {
         lastTableText = tableResult.text;
         const title = fullText.split(/\r?\n/).map(line => line.trim()).filter(Boolean).slice(0, 2).join("\n");
@@ -420,7 +420,7 @@ function normalizeCellText(value, columnIndex, rowIndex, examLayout) {
   return text;
 }
 
-async function recognizeTableCells(worker, source, grid, fullText) {
+async function recognizeTableCells(worker, source, grid, fullText, ocrData) {
   if (!grid || !Array.isArray(grid.xs) || !Array.isArray(grid.ys)) {
     return { ok: false, reason: "표의 행과 열 경계선을 충분히 검출하지 못했습니다." };
   }
@@ -460,22 +460,31 @@ async function recognizeTableCells(worker, source, grid, fullText) {
         continue;
       }
 
-      const cellCanvas = makeAdaptiveCellCanvas(source, x0, y0, x1, y1);
-      const narrowCell = (x1 - x0) < 80;
-      const firstPsm = narrowCell ? "6" : "4";
-      await worker.setParameters({ tessedit_pageseg_mode: firstPsm, preserve_interword_spaces: "1" });
-      let result = await worker.recognize(cellCanvas);
-      let bestText = result.data.text || "";
-      let bestConfidence = Number(result.data.confidence) || 0;
+      let bestText = "";
+      const isScoreColumn = column === 1 || column === 2 || column === 4 || column === 5;
+      if (isScoreColumn && Array.isArray(ocrData && ocrData.words)) {
+        const words = ocrData.words.filter(word => {
+          if (!word || !word.bbox || typeof word.text !== "string") return false;
+          const centerX = (word.bbox.x0 + word.bbox.x1) / 2;
+          const centerY = (word.bbox.y0 + word.bbox.y1) / 2;
+          return centerX >= x0 && centerX <= x1 && centerY >= y0 && centerY <= y1;
+        }).sort((a, b) => a.bbox.x0 - b.bbox.x0);
+        bestText = words.map(word => word.text).join(" ");
+        const score = bestText.match(/\d{1,3}/);
+        if (score) bestText = score[0] + "점";
+      }
 
-      if (!narrowCell && bestConfidence < 85) {
-        await worker.setParameters({ tessedit_pageseg_mode: "11", preserve_interword_spaces: "1" });
-        const retry = await worker.recognize(cellCanvas);
-        const retryConfidence = Number(retry.data.confidence) || 0;
-        if (retryConfidence > bestConfidence) {
-          bestText = retry.data.text || "";
-          bestConfidence = retryConfidence;
-        }
+      // Score boxes already have reliable word coordinates in the full-page OCR.
+      // Only the subject and long text cells need a separate cell-level OCR pass.
+      if (!bestText) {
+        const cellCanvas = makeAdaptiveCellCanvas(source, x0, y0, x1, y1);
+        const narrowCell = (x1 - x0) < 80;
+        await worker.setParameters({
+          tessedit_pageseg_mode: narrowCell ? "6" : "4",
+          preserve_interword_spaces: "1"
+        });
+        const result = await worker.recognize(cellCanvas);
+        bestText = result.data.text || "";
       }
       cells.push(normalizeCellText(bestText, column, row, examLayout));
     }
