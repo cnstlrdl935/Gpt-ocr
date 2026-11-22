@@ -471,7 +471,7 @@ async function recognizeTableCells(worker, source, grid, fullText, ocrData) {
         }).sort((a, b) => a.bbox.x0 - b.bbox.x0);
         bestText = words.map(word => word.text).join(" ");
         const score = bestText.match(/\d{1,3}/);
-        if (score) bestText = score[0] + "점";
+        bestText = score ? score[0] + "점" : "";
       }
 
       // Score boxes already have reliable word coordinates in the full-page OCR.
