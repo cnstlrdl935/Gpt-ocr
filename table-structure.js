@@ -48,14 +48,21 @@
     const intersects = (x, y) => {
       const xi = Math.round(x);
       const yi = Math.round(y);
-      let count = 0;
-      for (let yy = Math.max(0, yi - 2); yy < Math.min(height, yi + 3); yy++) {
-        for (let xx = Math.max(0, xi - 2); xx < Math.min(width, xi + 3); xx++) {
+      let horizontalSupport = 0;
+      let verticalSupport = 0;
+      for (let yy = Math.max(0, yi - 1); yy <= Math.min(height - 1, yi + 1); yy++) {
+        for (let xx = Math.max(0, xi - 10); xx <= Math.min(width - 1, xi + 10); xx++) {
           const i = (yy * width + xx) * 4;
-          if (0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2] < 180) count++;
+          if (0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2] < 180) horizontalSupport++;
         }
       }
-      return count >= 3;
+      for (let xx = Math.max(0, xi - 1); xx <= Math.min(width - 1, xi + 1); xx++) {
+        for (let yy = Math.max(0, yi - 10); yy <= Math.min(height - 1, yi + 10); yy++) {
+          const i = (yy * width + xx) * 4;
+          if (0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2] < 180) verticalSupport++;
+        }
+      }
+      return horizontalSupport >= 6 && verticalSupport >= 6;
     };
 
     // Page frames usually meet only at the four corners. Actual table rules
@@ -64,9 +71,13 @@
     ys = ys.filter(y => xs.filter(x => intersects(x, y)).length >= 3);
     if (xs.length < 3 || ys.length < 3) return null;
 
-    const bodyStartIndex = Math.max(0, ys.findIndex(y =>
-      xs.filter(x => intersects(x, y)).length >= xs.length - 1
-    ));
+    const fullWidthRuleIndices = ys
+      .map((y, index) => ({ y, index, support: xs.filter(x => intersects(x, y)).length }))
+      .filter(item => item.support >= xs.length - 1)
+      .map(item => item.index);
+    // The first full-width rule is normally the table's top edge; the next
+    // one closes the header and marks the first body row.
+    const bodyStartIndex = fullWidthRuleIndices.length >= 2 ? fullWidthRuleIndices[1] : 0;
     return { xs, ys, bodyStartIndex, width, height };
   }
 
