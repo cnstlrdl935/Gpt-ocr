@@ -52,7 +52,7 @@ textarea{min-height:230px;resize:vertical;line-height:1.7}
 .actions button{flex:1 1 calc(50% - 9px);height:43px;border:1px solid #dfe1e5;border-radius:8px;background:#fff;color:#333;font-size:13px;font-weight:700}
 .actions button:hover:not(:disabled){background:#f5f5f6}
 footer{text-align:center;padding:12px 0 0}
-footer p{font-size:11px;color:#9a9ca1;line-height:1.6}
+footer p{font-size:11px;color:#9a9ca1;line-height:1.6}footer .version{margin-top:14px;padding-top:12px;border-top:1px solid #e5e6e8;color:#777;font-size:11px;letter-spacing:.2px}
 @media(max-width:480px){body{padding:0 14px 30px}header{padding:27px 2px 20px}h1{font-size:27px}section{padding:18px;border-radius:13px}.source-actions{gap:8px}.source-actions button{min-height:105px;padding:13px}.actions{gap:7px}.actions button{flex-basis:calc(50% - 7px)}}
 </style>
 </head>
@@ -100,11 +100,11 @@ footer p{font-size:11px;color:#9a9ca1;line-height:1.6}
 
 <footer>
 <p class="hint">인식률 개선을 위해 이미지 확대와 명암 보정을 적용합니다. 작은 글씨, 흐린 글씨, 특수 기호는 원본 이미지에 따라 정확도가 달라질 수 있습니다. 최초 실행 시 OCR 엔진과 언어 데이터를 인터넷에서 내려받습니다.</p>
-</footer>
+<p class="version">버전 v0.9.0 · OCR 엔진 Tesseract.js 5.1.1</p>\n</footer>
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
-<script src="./table-structure.js?v=e5003a2"></script>
+<script src="./table-structure.js?v=v0.9.0"></script>
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
@@ -126,9 +126,11 @@ async function prepareImageForOcr(file) {
       image.onerror = reject;
     });
 
-    // 작은 글자는 확대하고, 지나치게 큰 이미지는 처리 부담을 줄입니다.
+    // OCR은 원본 획 모양을 보존하는 것이 중요합니다.
+    // 큰 이미지를 일괄 2.2배 확대하거나 강한 명암 보정을 하면
+    // 한글의 가는 획과 표 안의 작은 글자가 뭉개질 수 있습니다.
     const longestSide = Math.max(image.naturalWidth, image.naturalHeight);
-    const scale = Math.min(2.2, 2600 / longestSide);
+    const scale = longestSide < 1100 ? Math.min(1.6, 1800 / longestSide) : Math.min(1, 2600 / longestSide);
     const width = Math.max(1, Math.round(image.naturalWidth * scale));
     const height = Math.max(1, Math.round(image.naturalHeight * scale));
     const canvas = document.createElement("canvas");
@@ -139,17 +141,7 @@ async function prepareImageForOcr(file) {
     context.imageSmoothingQuality = "high";
     context.drawImage(image, 0, 0, width, height);
 
-    // 컬러 편차를 줄이고 글자와 배경의 대비를 보정합니다.
-    const frame = context.getImageData(0, 0, width, height);
-    const pixels = frame.data;
-    for (let i = 0; i < pixels.length; i += 4) {
-      const gray = 0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2];
-      const adjusted = Math.max(0, Math.min(255, (gray - 128) * 1.22 + 128));
-      pixels[i] = adjusted;
-      pixels[i + 1] = adjusted;
-      pixels[i + 2] = adjusted;
-    }
-    context.putImageData(frame, 0, 0);
+    // 원본 색상과 획의 농도를 유지합니다. 전역 대비 증폭은 적용하지 않습니다.
 
     return await new Promise((resolve, reject) => {
       canvas.toBlob(blob => {
@@ -273,7 +265,9 @@ $("run").addEventListener("click", async () => {
     const result = await worker.recognize(ocrImage.blob);
     lastOcrData = result.data;
     lastOcrCanvas = ocrImage.canvas;
-    $("output").value = formatOcrLayout(result.data) || "인식된 문자가 없습니다. 더 선명한 이미지로 다시 시도해 주세요.";
+    // Tesseract 자체의 읽기 순서를 보존합니다. 별도 줄 재조립은
+    // 표의 좌우 열 순서를 뒤섞을 수 있어 기본 결과에는 적용하지 않습니다.
+    $("output").value = (result.data.text || "").trim() || "인식된 문자가 없습니다. 더 선명한 이미지로 다시 시도해 주세요.";
     $("table-preview").hidden = true;
     $("table-preview").replaceChildren();
     $("progress").value = 1;
