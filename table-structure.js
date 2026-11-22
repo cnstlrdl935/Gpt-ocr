@@ -67,11 +67,66 @@
     if(ys.length<3) return null;
     return {xs,ys};
   }
+  function detectFromOcrLines(words) {
+    if (!words.length) return {ok:false,reason:"인식된 단어의 위치 정보가 없습니다. 먼저 문자 추출을 실행해 주세요."};
+    const heights=words.map(w=>w.bbox.y1-w.bbox.y0);
+    const lineTolerance=Math.max(5,median(heights)*0.58);
+    const lines=[];
+    for(const word of words.slice().sort((a,b)=>((a.bbox.y0+a.bbox.y1)-(b.bbox.y0+b.bbox.y1))||a.bbox.x0-b.bbox.x0)){
+      const cy=(word.bbox.y0+word.bbox.y1)/2;
+      let line=lines.find(item=>Math.abs(item.cy-cy)<=lineTolerance);
+      if(!line){line={cy,words:[]};lines.push(line);}
+      line.words.push(word);
+      line.cy=line.words.reduce((sum,w)=>sum+(w.bbox.y0+w.bbox.y1)/2,0)/line.words.length;
+    }
+    lines.sort((a,b)=>a.cy-b.cy);
+    const gaps=[];
+    for(let li=0;li<lines.length;li++){
+      const ordered=lines[li].words.sort((a,b)=>a.bbox.x0-b.bbox.x0);
+      for(let i=0;i<ordered.length-1;i++){
+        const gap=ordered[i+1].bbox.x0-ordered[i].bbox.x1;
+        if(gap>=Math.max(12,median(heights)*1.25)){
+          gaps.push({x:(ordered[i].bbox.x1+ordered[i+1].bbox.x0)/2,line:li,gap});
+        }
+      }
+    }
+    const clusters=[];
+    const tolerance=Math.max(16,median(heights)*2.0);
+    for(const gap of gaps.sort((a,b)=>a.x-b.x)){
+      let cluster=clusters.find(c=>Math.abs(c.x-gap.x)<=tolerance);
+      if(!cluster){cluster={x:gap.x,lines:new Set(),values:[]};clusters.push(cluster);}
+      cluster.values.push(gap.x);cluster.lines.add(gap.line);
+      cluster.x=cluster.values.reduce((a,b)=>a+b,0)/cluster.values.length;
+    }
+    // A separator must recur on multiple OCR lines; a single wide word gap
+    // is not enough evidence to create a column.
+    const separators=clusters.filter(c=>c.lines.size>=2).sort((a,b)=>a.x-b.x).map(c=>c.x);
+    const minX=Math.min(...words.map(w=>w.bbox.x0));
+    const maxX=Math.max(...words.map(w=>w.bbox.x1));
+    if(!separators.length) {
+      return {ok:false,reason:"표의 선은 검출되지 않았고, 여러 OCR 줄에서 반복되는 열 경계도 확인되지 않았습니다. 원본 이미지의 표 전체가 보이도록 다시 촬영하거나 이미지를 올려 주세요."};
+    }
+    const bounds=[minX-1,...separators.filter(x=>x>minX&&x<maxX),maxX+1];
+    const matrix=lines.map(line=>{
+      const cells=Array(bounds.length-1).fill("");
+      for(const word of line.words.sort((a,b)=>a.bbox.x0-b.bbox.x0)){
+        const cx=(word.bbox.x0+word.bbox.x1)/2;
+        let col=bounds.findIndex((x,i)=>i<bounds.length-1&&cx>=x&&cx<bounds[i+1]);
+        if(col<0) col=cells.length-1;
+        cells[col]+=(cells[col]?" ":"")+word.text.trim();
+      }
+      return cells;
+    });
+    const source=words.map(w=>w.text.trim()).sort().join("\u0000");
+    const output=matrix.flatMap(row=>row.join(" ").split(/\\s+/)).filter(Boolean).sort().join("\u0000");
+    if(source!==output) return {ok:false,reason:"자동 열 분할 과정에서 글자 보존 검사를 통과하지 못했습니다. 원본 OCR 텍스트는 유지했습니다."};
+    return {ok:true,rowCount:matrix.length,columnCount:bounds.length-1,text:matrix.map(row=>row.join("\\t")).join("\\n"),grid:{verticalLines:0,horizontalLines:0},method:"ocr-line-fallback"};
+  }
   function detect(data, canvas) {
     const words=(Array.isArray(data&&data.words)?data.words:[])
       .filter(validWord).slice().sort((a,b)=>a.bbox.y0-b.bbox.y0||a.bbox.x0-b.bbox.x0);
     const grid=detectGrid(canvas);
-    if(!grid) return {ok:false,reason:"이미지에서 표의 가로선과 세로선을 충분히 검출하지 못했습니다. 선이 선명한 원본 이미지를 사용해 주세요."};
+    if(!grid) return detectFromOcrLines(words);
     const xs=grid.xs,ys=grid.ys;
     const xBounds=xs.filter(x=>x>=xs[0]&&x<=xs[xs.length-1]);
     const yBounds=ys.filter(y=>y>=ys[0]&&y<=ys[ys.length-1]);
