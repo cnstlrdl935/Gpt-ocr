@@ -106,7 +106,7 @@
     // 표 변환은 재배치만 허용합니다. OCR에서 읽은 단어의 추가·삭제·중복을 차단합니다.
     const tokenCounts = text => {
       const counts = new Map();
-      for (const token of (text.match(/[^\\s]+/g) || [])) {
+      for (const token of (text.match(/[^\s]+/g) || [])) {
         const key = token.toLocaleLowerCase();
         counts.set(key, (counts.get(key) || 0) + 1);
       }
@@ -124,7 +124,7 @@
       rowCount: matrix.length,
       columnCount: boundaries.length + 1,
       boundaries,
-      text: matrix.map(row => row.join("\\t")).join("\\n")
+      text: matrix.map(row => row.join("\t")).join("\n")
     };
   }
 
