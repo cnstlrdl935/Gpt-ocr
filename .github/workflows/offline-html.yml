@@ -1,73 +1,45 @@
-
-name: Build Offline OCR HTML
+name: Deploy OCR Scanner Pro
 
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
+    branches: [main]
     paths:
-      - ".github/workflows/offline-html.yml"
       - "offline-html/**"
+      - ".github/workflows/offline-html.yml"
 
 permissions:
   contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
 
 jobs:
-  build:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - name: Prepare site
+        run: |
+          mkdir -p site
+          cp offline-html/index.html site/index.html
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
         with:
-          node-version: "20"
+          path: site
 
-      - name: Install build tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y curl unzip
-
-      - name: Download Tesseract.js
-        run: |
-          mkdir -p offline-html/vendor
-          cd offline-html/vendor
-          npm pack tesseract.js@5.1.1
-          tar -xzf tesseract.js-5.1.1.tgz
-          cp package/dist/tesseract.min.js tesseract.min.js
-
-      - name: Download OCR core
-        run: |
-          mkdir -p offline-html/vendor/core
-          cd offline-html/vendor/core
-          curl -L \
-            https://cdn.jsdelivr.net/npm/tesseract.js-core@5.1.1/tesseract-core.wasm.js \
-            -o tesseract-core.wasm.js
-          curl -L \
-            https://cdn.jsdelivr.net/npm/tesseract.js-core@5.1.1/tesseract-core.wasm \
-            -o tesseract-core.wasm
-
-      - name: Download language data
-        run: |
-          mkdir -p offline-html/vendor/lang
-          curl -L \
-            https://tessdata.projectnaptha.com/4.0.0/kor.traineddata.gz \
-            -o offline-html/vendor/lang/kor.traineddata.gz
-          curl -L \
-            https://tessdata.projectnaptha.com/4.0.0/eng.traineddata.gz \
-            -o offline-html/vendor/lang/eng.traineddata.gz
-
-      - name: Build single HTML
-        run: |
-          node offline-html/build.mjs
-
-      - name: Upload HTML
-        uses: actions/upload-artifact@v4
-        with:
-          name: OCR-Scanner-Pro-Offline
-          path: dist/OCR-Scanner-Pro-Offline.html
-          if-no-files-found: error
-          retention-days: 30
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
