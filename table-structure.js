@@ -82,7 +82,7 @@
 
     const slopes = [0.32, 0.36, 0.40, 0.44, 0.48, -0.32, -0.36, -0.40, -0.44, -0.48];
     for (const slope of slopes) {
-      for (let intercept = -height; intercept <= height; intercept += 2) {
+      for (let intercept = -Math.ceil(width * Math.abs(slope)) - height; intercept <= height; intercept += 2) {
         let samples = 0;
         let dark = 0;
         for (let x = 0; x < width; x += 2) {
@@ -103,7 +103,7 @@
           }
           if (hit) dark++;
         }
-        if (samples >= width * 0.4 && dark / samples >= 0.72) return true;
+        if (samples >= width * 0.2 && dark / samples >= 0.8) return true;
       }
     }
     return false;
