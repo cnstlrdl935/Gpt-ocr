@@ -111,6 +111,7 @@ const $ = id => document.getElementById(id);
 let selectedFile = null;
 let previewUrl = null;
 let lastOcrData = null;
+let lastOcrCanvas = null;
 
 // 웹에서는 브라우저가 제공하는 이미지 파일 선택 창을 사용합니다.
 $("open-files").addEventListener("click", () => $("file").click());
@@ -152,7 +153,7 @@ async function prepareImageForOcr(file) {
 
     return await new Promise((resolve, reject) => {
       canvas.toBlob(blob => {
-        if (blob) resolve(blob);
+        if (blob) resolve({ blob, canvas });
         else reject(new Error("이미지 전처리에 실패했습니다."));
       }, "image/png");
     });
@@ -205,6 +206,7 @@ function formatOcrLayout(data) {
 function useSelectedImage(file) {
   selectedFile = file || null;
   lastOcrData = null;
+  lastOcrCanvas = null;
   $("progress").value = 0;
   if (previewUrl) URL.revokeObjectURL(previewUrl);
   previewUrl = null;
@@ -268,8 +270,9 @@ $("run").addEventListener("click", async () => {
     $("status").textContent = "이미지 선명도와 명암을 보정하고 있습니다.";
     const ocrImage = await prepareImageForOcr(selectedFile);
     $("status").textContent = "문자와 기호를 인식하고 있습니다.";
-    const result = await worker.recognize(ocrImage);
+    const result = await worker.recognize(ocrImage.blob);
     lastOcrData = result.data;
+    lastOcrCanvas = ocrImage.canvas;
     $("output").value = formatOcrLayout(result.data) || "인식된 문자가 없습니다. 더 선명한 이미지로 다시 시도해 주세요.";
     $("table-preview").hidden = true;
     $("table-preview").replaceChildren();
@@ -342,7 +345,7 @@ function extractTableText(data) {
   if (!window.TableStructureDetector) {
     return { ok: false, reason: "표 구조 분석 모듈을 불러오지 못했습니다." };
   }
-  return window.TableStructureDetector.detect(data);
+  return window.TableStructureDetector.detect(data, lastOcrCanvas);
 }
 
 $("table").addEventListener("click", () => {
