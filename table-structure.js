@@ -44,8 +44,8 @@
     const vx=[],hy=[];
     for(let x=0;x<w;x++) if(col[x]>=verticalThreshold) vx.push(x);
     for(let y=0;y<h;y++) if(row[y]>=horizontalThreshold) hy.push(y);
-    const xs=clusterRuns(vx,Math.max(2,Math.round(w/900)));
-    const ys=clusterRuns(hy,Math.max(2,Math.round(h/1200)));
+    const xs=clusterRuns(vx,Math.max(8,Math.round(w/250)));
+    const ys=clusterRuns(hy,Math.max(8,Math.round(h/250)));
     if(xs.length<3 || ys.length<3) return null;
     return {xs,ys};
   }
@@ -82,6 +82,20 @@
           .filter(Boolean).join(" / ");
       }
     }
+    // Remove empty outer frame bands. The photographed page may have a second
+    // decorative border outside the actual table grid.
+    while (matrix.length && matrix[0].every(cell => !cell.trim())) matrix.shift();
+    while (matrix.length && matrix[matrix.length - 1].every(cell => !cell.trim())) matrix.pop();
+    while (matrix.length && matrix.every(row => !row[0].trim())) {
+      matrix.forEach(row => row.shift());
+    }
+    while (matrix.length && matrix.every(row => !row[row.length - 1].trim())) {
+      matrix.forEach(row => row.pop());
+    }
+    if (!matrix.length || !matrix[0].length) {
+      return {ok:false,reason:"표 내부의 셀을 찾지 못했습니다."};
+    }
+
     // Reject text outside the detected grid or any token loss/duplication.
     const tokenCounts=text=>{
       const map=new Map();
