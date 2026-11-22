@@ -420,14 +420,19 @@ async function recognizeTableCells(worker, source, grid) {
 
   for (let row = 0; row < rowCount; row++) {
     const cells = [];
+    const y0 = bodyYs[row];
+    const y1 = bodyYs[row + 1];
+    // Detect a diagonal divider once across the first-grade block. This avoids
+    // interpreting the long diagonal rule as stray letters in its individual cells.
+    const firstGradeBlockHasDiagonal = columnCount >= 4
+      && window.TableStructureDetector.isDiagonalDivider(source, xs[1], y0, xs[4], y1);
+
     for (let column = 0; column < columnCount; column++) {
       $("status").textContent = "표 셀을 개별 인식하고 있습니다. " + (row + 1) + "/" + rowCount + "행, " + (column + 1) + "/" + columnCount + "열";
       const x0 = xs[column];
       const x1 = xs[column + 1];
-      const y0 = bodyYs[row];
-      const y1 = bodyYs[row + 1];
 
-      if (window.TableStructureDetector.isDiagonalDivider(source, x0, y0, x1, y1)) {
+      if (firstGradeBlockHasDiagonal && column >= 1 && column <= 3) {
         cells.push("");
         continue;
       }
