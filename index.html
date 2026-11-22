@@ -352,24 +352,39 @@ function extractTableText(data) {
     a.bbox.x0 - b.bbox.x0
   );
 
+  // 단순 중심점 비교 대신 세로 영역의 겹침을 기준으로 같은 글줄을 묶습니다.
   const rows = [];
   for (const word of sorted) {
     const centerY = (word.bbox.y0 + word.bbox.y1) / 2;
-    let row = rows.find(candidate => Math.abs(candidate.centerY - centerY) <= medianHeight * 0.65);
-    if (!row) {
-      row = { centerY, words: [] };
-      rows.push(row);
+    let bestRow = null;
+    let bestOverlap = 0;
+    for (const candidate of rows) {
+      const overlap = Math.max(0, Math.min(candidate.bottom, word.bbox.y1) - Math.max(candidate.top, word.bbox.y0));
+      const ratio = overlap / Math.max(1, Math.min(candidate.bottom - candidate.top, word.bbox.y1 - word.bbox.y0));
+      const centerDistance = Math.abs(candidate.centerY - centerY);
+      if (ratio >= 0.35 && ratio > bestOverlap) {
+        bestOverlap = ratio;
+        bestRow = candidate;
+      } else if (!bestRow && centerDistance <= medianHeight * 0.48) {
+        bestRow = candidate;
+      }
     }
-    row.words.push(word);
-    row.centerY = row.words.reduce((sum, item) =>
-      sum + (item.bbox.y0 + item.bbox.y1) / 2, 0) / row.words.length;
+    if (!bestRow) {
+      bestRow = { top: word.bbox.y0, bottom: word.bbox.y1, centerY, words: [] };
+      rows.push(bestRow);
+    }
+    bestRow.words.push(word);
+    bestRow.top = Math.min(bestRow.top, word.bbox.y0);
+    bestRow.bottom = Math.max(bestRow.bottom, word.bbox.y1);
+    bestRow.centerY = (bestRow.top + bestRow.bottom) / 2;
   }
 
   const cellRows = rows.sort((a, b) => a.centerY - b.centerY).map(row => {
     const lineWords = row.words.sort((a, b) => a.bbox.x0 - b.bbox.x0);
     const widths = lineWords.map(word => Math.max(1, word.bbox.x1 - word.bbox.x0)).sort((a, b) => a - b);
     const typicalWidth = widths[Math.floor(widths.length / 2)];
-    const gapThreshold = Math.max(medianHeight * 1.15, typicalWidth * 1.4);
+    // 글자 사이의 일반 공백은 한 셀로 유지하고, 큰 빈 공간만 셀 경계로 봅니다.
+    const gapThreshold = Math.max(medianHeight * 1.55, typicalWidth * 1.25);
     const cells = [];
     let current = null;
     for (const word of lineWords) {
@@ -388,7 +403,7 @@ function extractTableText(data) {
 
   // 모든 행의 셀 시작 위치를 함께 분석해 열 위치를 정렬합니다.
   const starts = cellRows.flat().map(cell => cell.x).sort((a, b) => a - b);
-  const tolerance = Math.max(medianHeight * 2.2, 12);
+  const tolerance = Math.max(medianHeight * 1.8, 14);
   const columns = [];
   for (const x of starts) {
     const last = columns[columns.length - 1];
@@ -443,9 +458,9 @@ $("pdf").addEventListener("click", () => {
   }
   const escapeHtml = text => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const safeText = escapeHtml(value);
-  const contentHtml = value.includes("\\t")
-    ? "<table><tbody>" + value.split("\\n").map(row =>
-        "<tr>" + row.split("\\t").map(cell => "<td>" + escapeHtml(cell) + "</td>").join("") + "</tr>"
+  const contentHtml = value.includes("\t")
+    ? "<table><tbody>" + value.split("\n").map(row =>
+        "<tr>" + row.split("\t").map(cell => "<td>" + escapeHtml(cell) + "</td>").join("") + "</tr>"
       ).join("") + "</tbody></table>"
     : "<pre>" + safeText + "</pre>";
   printWindow.document.open();
