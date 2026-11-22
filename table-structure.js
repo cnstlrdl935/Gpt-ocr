@@ -45,8 +45,26 @@
     for(let x=0;x<w;x++) if(col[x]>=verticalThreshold) vx.push(x);
     for(let y=0;y<h;y++) if(row[y]>=horizontalThreshold) hy.push(y);
     const xs=clusterRuns(vx,Math.max(8,Math.round(w/250)));
-    const ys=clusterRuns(hy,Math.max(8,Math.round(h/250)));
+    let ys=clusterRuns(hy,Math.max(8,Math.round(h/250)));
     if(xs.length<3 || ys.length<3) return null;
+
+    // A horizontal page frame can span the whole page without belonging to
+    // the table. Keep horizontal rules that cross several sustained vertical
+    // grid strokes, not merely the horizontal stroke itself.
+    const verticalSupport=(x,y)=>{
+      const xi=Math.round(x), yi=Math.round(y);
+      let count=0;
+      for(let yy=Math.max(0,yi-20);yy<Math.min(h,yi+21);yy++){
+        for(let xx=Math.max(0,xi-2);xx<Math.min(w,xi+3);xx++){
+          const i=(yy*w+xx)*4;
+          const gray=0.299*px[i]+0.587*px[i+1]+0.114*px[i+2];
+          if(gray<105) count++;
+        }
+      }
+      return count;
+    };
+    ys=ys.filter(y=>xs.filter(x=>verticalSupport(x,y)>30).length>=3);
+    if(ys.length<3) return null;
     return {xs,ys};
   }
   function detect(data, canvas) {
