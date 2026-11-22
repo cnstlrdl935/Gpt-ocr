@@ -118,9 +118,9 @@
       return cells;
     });
     const source=words.map(w=>w.text.trim()).sort().join("\u0000");
-    const output=matrix.flatMap(row=>row.join(" ").split(/\\s+/)).filter(Boolean).sort().join("\u0000");
+    const output=matrix.flatMap(row=>row.join(" ").split(/\s+/)).filter(Boolean).sort().join("\u0000");
     if(source!==output) return {ok:false,reason:"자동 열 분할 과정에서 글자 보존 검사를 통과하지 못했습니다. 원본 OCR 텍스트는 유지했습니다."};
-    return {ok:true,rowCount:matrix.length,columnCount:bounds.length-1,text:matrix.map(row=>row.join("\\t")).join("\\n"),grid:{verticalLines:0,horizontalLines:0},method:"ocr-line-fallback"};
+    return {ok:true,rowCount:matrix.length,columnCount:bounds.length-1,text:matrix.map(row=>row.join("\t")).join("\n"),grid:{verticalLines:0,horizontalLines:0},method:"ocr-line-fallback"};
   }
   function detect(data, canvas) {
     const words=(Array.isArray(data&&data.words)?data.words:[])
