@@ -185,7 +185,9 @@
     const expected=tokenCounts(inside.map(w=>w.text.trim()).join(" "));
     const actual=tokenCounts(matrix.flat().join(" "));
     if(expected.size!==actual.size||Array.from(expected).some(([t,n])=>actual.get(t)!==n)){
-      return {ok:false,reason:"표 격자 안의 글자 보존 검사를 통과하지 못했습니다. 원본 OCR 텍스트는 유지했습니다."};
+      // OCR boxes can straddle detected grid rules. Retry with word-position
+      // grouping; accept only if that path independently preserves all words.
+      return detectFromOcrLines(words);
     }
     return {
       ok:true,rowCount:matrix.length,columnCount:matrix[0].length,
