@@ -158,7 +158,7 @@ function formatOcrLayout(data) {
 
   const validLines = lines
     .map(line => ({
-      text: (line.text || "").replace(/[\\t ]+/g, " ").trim(),
+      text: (line.text || "").replace(/[\t ]+/g, " ").trim(),
       top: line.bbox && Number.isFinite(line.bbox.y0) ? line.bbox.y0 : null,
       bottom: line.bbox && Number.isFinite(line.bbox.y1) ? line.bbox.y1 : null
     }))
@@ -189,7 +189,7 @@ function formatOcrLayout(data) {
     output.push(line.text);
     previous = line;
   }
-  return output.join("\\n").trim();
+  return output.join("\n").trim();
 }
 
 function useSelectedImage(file) {
