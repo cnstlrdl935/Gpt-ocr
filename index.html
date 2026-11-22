@@ -104,6 +104,7 @@ footer p{font-size:11px;color:#9a9ca1;line-height:1.6}
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+<script src="./table-structure.js"></script>
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
@@ -338,125 +339,27 @@ $("output").addEventListener("input", () => {
 });
 
 function extractTableText(data) {
-  // OCR 엔진이 구분한 줄을 우선 행으로 사용합니다. 서로 다른 줄의 단어를
-  // y좌표만으로 다시 합치면 제목/표 본문이 섞일 수 있으므로 줄 경계를 보존합니다.
-  const validWord = word => word && typeof word.text === "string" && word.text.trim() &&
-    word.bbox && Number.isFinite(word.bbox.x0) && Number.isFinite(word.bbox.x1) &&
-    Number.isFinite(word.bbox.y0) && Number.isFinite(word.bbox.y1);
-
-  let sourceRows = Array.isArray(data && data.lines)
-    ? data.lines.map(line => Array.isArray(line.words) ? line.words.filter(validWord) : [])
-        .filter(row => row.length)
-    : [];
-
-  // 줄 내부 단어 정보가 없는 OCR 결과에 한해서만 단어 높이로 행을 추정합니다.
-  if (!sourceRows.length) {
-    const words = Array.isArray(data && data.words) ? data.words.filter(validWord) : [];
-    if (words.length < 2) return "";
-    const heights = words.map(word => Math.max(1, word.bbox.y1 - word.bbox.y0)).sort((x, y) => x - y);
-    const medianHeight = heights[Math.floor(heights.length / 2)];
-    const sorted = words.slice().sort((x, y) =>
-      ((x.bbox.y0 + x.bbox.y1) / 2) - ((y.bbox.y0 + y.bbox.y1) / 2) || x.bbox.x0 - y.bbox.x0
-    );
-    sourceRows = [];
-    for (const word of sorted) {
-      const cy = (word.bbox.y0 + word.bbox.y1) / 2;
-      const row = sourceRows.find(items => {
-        const centers = items.map(item => (item.bbox.y0 + item.bbox.y1) / 2);
-        const rowCenter = centers.reduce((sum, value) => sum + value, 0) / centers.length;
-        return Math.abs(rowCenter - cy) <= medianHeight * 0.42;
-      });
-      if (row) row.push(word);
-      else sourceRows.push([word]);
-    }
+  if (!window.TableStructureDetector) {
+    return { ok: false, reason: "표 구조 분석 모듈을 불러오지 못했습니다." };
   }
-
-  const allWords = sourceRows.flat().filter(validWord);
-  if (allWords.length < 2) return "";
-  const heights = allWords.map(word => Math.max(1, word.bbox.y1 - word.bbox.y0)).sort((x, y) => x - y);
-  const medianHeight = heights[Math.floor(heights.length / 2)];
-
-  // 각 OCR 줄 안에서만 큰 가로 간격을 셀 경계로 판단합니다.
-  const rows = sourceRows.map(words => {
-    const ordered = words.slice().sort((x, y) => x.bbox.x0 - y.bbox.x0);
-    const widths = ordered.map(word => Math.max(1, word.bbox.x1 - word.bbox.x0)).sort((x, y) => x - y);
-    const medianWidth = widths[Math.floor(widths.length / 2)];
-    const gapThreshold = Math.max(medianHeight * 2.1, medianWidth * 1.8);
-    const cells = [];
-    let cell = null;
-    for (const word of ordered) {
-      const gap = cell ? word.bbox.x0 - cell.right : 0;
-      if (!cell || gap > gapThreshold) {
-        if (cell) cells.push(cell);
-        cell = { text: word.text.trim(), x: word.bbox.x0, right: word.bbox.x1 };
-      } else {
-        cell.text += " " + word.text.trim();
-        cell.right = Math.max(cell.right, word.bbox.x1);
-      }
-    }
-    if (cell) cells.push(cell);
-    return cells;
-  });
-
-  const starts = rows.flat().map(cell => cell.x).sort((x, y) => x - y);
-  const tolerance = Math.max(medianHeight * 1.5, 12);
-  const columns = [];
-  for (const x of starts) {
-    const nearest = columns.reduce((best, column, index) =>
-      Math.abs(column.center - x) < Math.abs(columns[best].center - x) ? index : best, 0);
-    if (!columns.length || Math.abs(columns[nearest].center - x) > tolerance) {
-      columns.push({ center: x, count: 1 });
-    } else {
-      const column = columns[nearest];
-      column.center = (column.center * column.count + x) / (column.count + 1);
-      column.count++;
-    }
-  }
-  if (columns.length < 2) return "";
-
-  const outputRows = rows.map(cells => {
-    const output = Array(columns.length).fill("");
-    for (const cell of cells) {
-      let nearest = 0;
-      for (let i = 1; i < columns.length; i++) {
-        if (Math.abs(columns[i].center - cell.x) < Math.abs(columns[nearest].center - cell.x)) nearest = i;
-      }
-      output[nearest] = output[nearest] ? output[nearest] + " " + cell.text : cell.text;
-    }
-    return output;
-  });
-
-  // 변환 과정에서 OCR 단어가 누락되거나 중복되면 결과를 내보내지 않습니다.
-  const normalizeTokens = value => value.toLocaleLowerCase().match(/[^\s]+/g) || [];
-  const expected = normalizeTokens(allWords.map(word => word.text.trim()).join(" "));
-  const actual = normalizeTokens(outputRows.flat().join(" "));
-  const countTokens = tokens => {
-    const counts = new Map();
-    for (const token of tokens) counts.set(token, (counts.get(token) || 0) + 1);
-    return counts;
-  };
-  const expectedCounts = countTokens(expected);
-  const actualCounts = countTokens(actual);
-  if (expectedCounts.size !== actualCounts.size ||
-      [...expectedCounts].some(([token, count]) => actualCounts.get(token) !== count)) {
-    return "";
-  }
-
-  return outputRows.map(row => row.map(cell => cell.replace(/\t/g, " ")).join("\t")).join("\n");
+  return window.TableStructureDetector.detect(data);
 }
+
 $("table").addEventListener("click", () => {
   if (!lastOcrData) {
     $("status").textContent = "먼저 이미지를 선택하고 문자 추출을 실행해 주세요.";
     return;
   }
-  const tableText = extractTableText(lastOcrData);
-  if (!tableText) {
-    $("status").textContent = "표의 열 구분을 찾지 못했습니다. 원본 표가 선명하고 열 간격이 충분한지 확인해 주세요.";
+  const result = extractTableText(lastOcrData);
+  if (!result.ok) {
+    $("table-preview").hidden = true;
+    $("table-preview").replaceChildren();
+    $("status").textContent = result.reason || "표의 행과 열을 안정적으로 구분하지 못했습니다.";
     return;
   }
-  // 표 변환 결과는 별도 미리보기에만 표시하고, 원본 OCR 텍스트는 덮어쓰지 않습니다.
-  renderTablePreview(tableText);
-  $("status").textContent = `표 미리보기를 만들었습니다. ${tableText.split("\n").length}개 행을 자동으로 구성했습니다. 원본 인식 텍스트는 그대로 유지됩니다.`;
+  // 표 추출은 원본 OCR 텍스트를 덮어쓰지 않고 별도 미리보기로 제공합니다.
+  renderTablePreview(result.text);
+  $("status").textContent = `표 구조 분석 완료: ${result.rowCount}개 행, ${result.columnCount}개 열입니다. 원본 OCR 텍스트는 유지됩니다.`;
 });
 
 $("pdf").addEventListener("click", () => {
