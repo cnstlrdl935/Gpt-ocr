@@ -338,108 +338,112 @@ $("output").addEventListener("input", () => {
 });
 
 function extractTableText(data) {
-  const words = Array.isArray(data && data.words)
-    ? data.words.filter(word => word.text && word.bbox &&
-        Number.isFinite(word.bbox.x0) && Number.isFinite(word.bbox.x1) &&
-        Number.isFinite(word.bbox.y0) && Number.isFinite(word.bbox.y1))
+  // OCR 엔진이 구분한 줄을 우선 행으로 사용합니다. 서로 다른 줄의 단어를
+  // y좌표만으로 다시 합치면 제목/표 본문이 섞일 수 있으므로 줄 경계를 보존합니다.
+  const validWord = word => word && typeof word.text === "string" && word.text.trim() &&
+    word.bbox && Number.isFinite(word.bbox.x0) && Number.isFinite(word.bbox.x1) &&
+    Number.isFinite(word.bbox.y0) && Number.isFinite(word.bbox.y1);
+
+  let sourceRows = Array.isArray(data && data.lines)
+    ? data.lines.map(line => Array.isArray(line.words) ? line.words.filter(validWord) : [])
+        .filter(row => row.length)
     : [];
-  if (words.length < 2) return "";
 
-  const heights = words.map(word => Math.max(1, word.bbox.y1 - word.bbox.y0)).sort((a, b) => a - b);
-  const medianHeight = heights[Math.floor(heights.length / 2)];
-  const sorted = words.slice().sort((a, b) =>
-    ((a.bbox.y0 + a.bbox.y1) / 2) - ((b.bbox.y0 + b.bbox.y1) / 2) ||
-    a.bbox.x0 - b.bbox.x0
-  );
-
-  // 글자 높이와 실제 세로 간격을 이용해 행 수를 자동으로 결정합니다.
-  // 작은 글씨와 큰 제목이 섞여 있어도 행 간격이 넓으면 별도 행으로 분리합니다.
-  const rows = [];
-  for (const word of sorted) {
-    const centerY = (word.bbox.y0 + word.bbox.y1) / 2;
-    const wordHeight = Math.max(1, word.bbox.y1 - word.bbox.y0);
-    let bestRow = null;
-    let bestScore = -Infinity;
-
-    for (const candidate of rows) {
-      const overlap = Math.max(0, Math.min(candidate.bottom, word.bbox.y1) - Math.max(candidate.top, word.bbox.y0));
-      const smallerHeight = Math.max(1, Math.min(candidate.bottom - candidate.top, wordHeight));
-      const overlapRatio = overlap / smallerHeight;
-      const centerDistance = Math.abs(candidate.centerY - centerY);
-      const allowedDistance = Math.max(medianHeight * 0.34, Math.min(wordHeight, candidate.bottom - candidate.top) * 0.38);
-
-      // 세로 영역이 충분히 겹치거나, 중심점이 해당 행의 허용 범위 안에 있을 때만 같은 행으로 처리합니다.
-      if (overlapRatio >= 0.28 || centerDistance <= allowedDistance) {
-        const score = overlapRatio * 2 - centerDistance / Math.max(1, medianHeight);
-        if (score > bestScore) {
-          bestScore = score;
-          bestRow = candidate;
-        }
-      }
+  // 줄 내부 단어 정보가 없는 OCR 결과에 한해서만 단어 높이로 행을 추정합니다.
+  if (!sourceRows.length) {
+    const words = Array.isArray(data && data.words) ? data.words.filter(validWord) : [];
+    if (words.length < 2) return "";
+    const heights = words.map(word => Math.max(1, word.bbox.y1 - word.bbox.y0)).sort((x, y) => x - y);
+    const medianHeight = heights[Math.floor(heights.length / 2)];
+    const sorted = words.slice().sort((x, y) =>
+      ((x.bbox.y0 + x.bbox.y1) / 2) - ((y.bbox.y0 + y.bbox.y1) / 2) || x.bbox.x0 - y.bbox.x0
+    );
+    sourceRows = [];
+    for (const word of sorted) {
+      const cy = (word.bbox.y0 + word.bbox.y1) / 2;
+      const row = sourceRows.find(items => {
+        const centers = items.map(item => (item.bbox.y0 + item.bbox.y1) / 2);
+        const rowCenter = centers.reduce((sum, value) => sum + value, 0) / centers.length;
+        return Math.abs(rowCenter - cy) <= medianHeight * 0.42;
+      });
+      if (row) row.push(word);
+      else sourceRows.push([word]);
     }
-
-    if (!bestRow) {
-      bestRow = { top: word.bbox.y0, bottom: word.bbox.y1, centerY, words: [] };
-      rows.push(bestRow);
-    }
-    bestRow.words.push(word);
-    bestRow.top = Math.min(bestRow.top, word.bbox.y0);
-    bestRow.bottom = Math.max(bestRow.bottom, word.bbox.y1);
-    bestRow.centerY = bestRow.words.reduce((sum, item) =>
-      sum + (item.bbox.y0 + item.bbox.y1) / 2, 0) / bestRow.words.length;
   }
 
-  const cellRows = rows.sort((a, b) => a.centerY - b.centerY).map(row => {
-    const lineWords = row.words.sort((a, b) => a.bbox.x0 - b.bbox.x0);
-    const widths = lineWords.map(word => Math.max(1, word.bbox.x1 - word.bbox.x0)).sort((a, b) => a - b);
-    const typicalWidth = widths[Math.floor(widths.length / 2)];
-    // 글자 사이의 일반 공백은 한 셀로 유지하고, 큰 빈 공간만 셀 경계로 봅니다.
-    const gapThreshold = Math.max(medianHeight * 1.55, typicalWidth * 1.25);
+  const allWords = sourceRows.flat().filter(validWord);
+  if (allWords.length < 2) return "";
+  const heights = allWords.map(word => Math.max(1, word.bbox.y1 - word.bbox.y0)).sort((x, y) => x - y);
+  const medianHeight = heights[Math.floor(heights.length / 2)];
+
+  // 각 OCR 줄 안에서만 큰 가로 간격을 셀 경계로 판단합니다.
+  const rows = sourceRows.map(words => {
+    const ordered = words.slice().sort((x, y) => x.bbox.x0 - y.bbox.x0);
+    const widths = ordered.map(word => Math.max(1, word.bbox.x1 - word.bbox.x0)).sort((x, y) => x - y);
+    const medianWidth = widths[Math.floor(widths.length / 2)];
+    const gapThreshold = Math.max(medianHeight * 2.1, medianWidth * 1.8);
     const cells = [];
-    let current = null;
-    for (const word of lineWords) {
-      const gap = current ? word.bbox.x0 - current.right : 0;
-      if (!current || gap > gapThreshold) {
-        if (current) cells.push(current);
-        current = { text: word.text, x: word.bbox.x0, right: word.bbox.x1 };
+    let cell = null;
+    for (const word of ordered) {
+      const gap = cell ? word.bbox.x0 - cell.right : 0;
+      if (!cell || gap > gapThreshold) {
+        if (cell) cells.push(cell);
+        cell = { text: word.text.trim(), x: word.bbox.x0, right: word.bbox.x1 };
       } else {
-        current.text += " " + word.text;
-        current.right = word.bbox.x1;
+        cell.text += " " + word.text.trim();
+        cell.right = Math.max(cell.right, word.bbox.x1);
       }
     }
-    if (current) cells.push(current);
+    if (cell) cells.push(cell);
     return cells;
   });
 
-  // 모든 행의 셀 시작 위치를 함께 분석해 열 위치를 정렬합니다.
-  const starts = cellRows.flat().map(cell => cell.x).sort((a, b) => a - b);
-  const tolerance = Math.max(medianHeight * 1.8, 14);
+  const starts = rows.flat().map(cell => cell.x).sort((x, y) => x - y);
+  const tolerance = Math.max(medianHeight * 1.5, 12);
   const columns = [];
   for (const x of starts) {
-    const last = columns[columns.length - 1];
-    if (!last || x - last.center > tolerance) {
+    const nearest = columns.reduce((best, column, index) =>
+      Math.abs(column.center - x) < Math.abs(columns[best].center - x) ? index : best, 0);
+    if (!columns.length || Math.abs(columns[nearest].center - x) > tolerance) {
       columns.push({ center: x, count: 1 });
     } else {
-      last.center = (last.center * last.count + x) / (last.count + 1);
-      last.count += 1;
+      const column = columns[nearest];
+      column.center = (column.center * column.count + x) / (column.count + 1);
+      column.count++;
     }
   }
   if (columns.length < 2) return "";
 
-  const alignedRows = cellRows.map(cells => {
+  const outputRows = rows.map(cells => {
     const output = Array(columns.length).fill("");
     for (const cell of cells) {
       let nearest = 0;
-      for (let index = 1; index < columns.length; index++) {
-        if (Math.abs(columns[index].center - cell.x) < Math.abs(columns[nearest].center - cell.x)) nearest = index;
+      for (let i = 1; i < columns.length; i++) {
+        if (Math.abs(columns[i].center - cell.x) < Math.abs(columns[nearest].center - cell.x)) nearest = i;
       }
       output[nearest] = output[nearest] ? output[nearest] + " " + cell.text : cell.text;
     }
     return output;
   });
-  return alignedRows.map(row => row.map(cell => cell.replace(/\t/g, " ")).join("\t")).join("\n");
-}
 
+  // 변환 과정에서 OCR 단어가 누락되거나 중복되면 결과를 내보내지 않습니다.
+  const normalizeTokens = value => value.toLocaleLowerCase().match(/[^\s]+/g) || [];
+  const expected = normalizeTokens(allWords.map(word => word.text.trim()).join(" "));
+  const actual = normalizeTokens(outputRows.flat().join(" "));
+  const countTokens = tokens => {
+    const counts = new Map();
+    for (const token of tokens) counts.set(token, (counts.get(token) || 0) + 1);
+    return counts;
+  };
+  const expectedCounts = countTokens(expected);
+  const actualCounts = countTokens(actual);
+  if (expectedCounts.size !== actualCounts.size ||
+      [...expectedCounts].some(([token, count]) => actualCounts.get(token) !== count)) {
+    return "";
+  }
+
+  return outputRows.map(row => row.map(cell => cell.replace(/\t/g, " ")).join("\t")).join("\n");
+}
 $("table").addEventListener("click", () => {
   if (!lastOcrData) {
     $("status").textContent = "먼저 이미지를 선택하고 문자 추출을 실행해 주세요.";
