@@ -450,9 +450,9 @@ $("table").addEventListener("click", () => {
     $("status").textContent = "표의 열 구분을 찾지 못했습니다. 원본 표가 선명하고 열 간격이 충분한지 확인해 주세요.";
     return;
   }
-  $("output").value = tableText;
+  // 표 변환 결과는 별도 미리보기에만 표시하고, 원본 OCR 텍스트는 덮어쓰지 않습니다.
   renderTablePreview(tableText);
-  $("status").textContent = `표 형태로 변환했습니다. 글자 높이와 세로 간격을 분석해 ${tableText.split("\\n").length}개 행을 자동으로 구성했습니다. 열 위치도 자동 추정했으므로 미리보기를 확인해 주세요.`;
+  $("status").textContent = `표 미리보기를 만들었습니다. ${tableText.split("\n").length}개 행을 자동으로 구성했습니다. 원본 인식 텍스트는 그대로 유지됩니다.`;
 });
 
 $("pdf").addEventListener("click", () => {
