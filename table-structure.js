@@ -51,16 +51,20 @@
       let horizontalSupport = 0;
       let verticalSupport = 0;
       for (let yy = Math.max(0, yi - 1); yy <= Math.min(height - 1, yi + 1); yy++) {
+        let count = 0;
         for (let xx = Math.max(0, xi - 10); xx <= Math.min(width - 1, xi + 10); xx++) {
           const i = (yy * width + xx) * 4;
-          if (0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2] < 180) horizontalSupport++;
+          if (0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2] < 180) count++;
         }
+        horizontalSupport = Math.max(horizontalSupport, count);
       }
       for (let xx = Math.max(0, xi - 1); xx <= Math.min(width - 1, xi + 1); xx++) {
+        let count = 0;
         for (let yy = Math.max(0, yi - 10); yy <= Math.min(height - 1, yi + 10); yy++) {
           const i = (yy * width + xx) * 4;
-          if (0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2] < 180) verticalSupport++;
+          if (0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2] < 180) count++;
         }
+        verticalSupport = Math.max(verticalSupport, count);
       }
       return horizontalSupport >= 6 && verticalSupport >= 6;
     };
