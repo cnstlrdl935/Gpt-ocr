@@ -86,7 +86,9 @@ footer p{font-size:11px;color:#9a9ca1;line-height:1.6}
 <textarea id="output" placeholder="추출된 문자가 여기에 표시됩니다. 필요하면 직접 수정할 수 있습니다."></textarea>
 <div class="actions">
 <button id="copy" class="secondary" type="button">복사</button>
+<button id="table" class="secondary" type="button">표 형태로 추출</button>
 <button id="save" class="secondary" type="button">TXT로 저장</button>
+<button id="pdf" class="secondary" type="button">PDF로 저장</button>
 </div>
 </section>
 
@@ -101,6 +103,7 @@ footer p{font-size:11px;color:#9a9ca1;line-height:1.6}
 const $ = id => document.getElementById(id);
 let selectedFile = null;
 let previewUrl = null;
+let lastOcrData = null;
 
 // 웹에서는 브라우저가 제공하는 이미지 파일 선택 창을 사용합니다.
 $("open-files").addEventListener("click", () => $("file").click());
@@ -194,6 +197,7 @@ function formatOcrLayout(data) {
 
 function useSelectedImage(file) {
   selectedFile = file || null;
+  lastOcrData = null;
   $("progress").value = 0;
   if (previewUrl) URL.revokeObjectURL(previewUrl);
   previewUrl = null;
@@ -258,6 +262,7 @@ $("run").addEventListener("click", async () => {
     const ocrImage = await prepareImageForOcr(selectedFile);
     $("status").textContent = "문자와 기호를 인식하고 있습니다.";
     const result = await worker.recognize(ocrImage);
+    lastOcrData = result.data;
     $("output").value = formatOcrLayout(result.data) || "인식된 문자가 없습니다. 더 선명한 이미지로 다시 시도해 주세요.";
     $("progress").value = 1;
     $("status").textContent = "문자 추출이 끝났습니다.";
@@ -294,6 +299,104 @@ $("copy").addEventListener("click", async () => {
     $("output").select();
     $("status").textContent = "자동 복사에 실패했습니다. 선택된 글자를 길게 눌러 복사해 주세요.";
   }
+});
+
+function extractTableText(data) {
+  const words = Array.isArray(data && data.words)
+    ? data.words.filter(word => word.text && word.bbox &&
+        Number.isFinite(word.bbox.x0) && Number.isFinite(word.bbox.x1) &&
+        Number.isFinite(word.bbox.y0) && Number.isFinite(word.bbox.y1))
+    : [];
+  if (words.length < 2) return "";
+
+  const heights = words.map(word => Math.max(1, word.bbox.y1 - word.bbox.y0)).sort((a, b) => a - b);
+  const medianHeight = heights[Math.floor(heights.length / 2)];
+  const sorted = words.slice().sort((a, b) =>
+    ((a.bbox.y0 + a.bbox.y1) / 2) - ((b.bbox.y0 + b.bbox.y1) / 2) ||
+    a.bbox.x0 - b.bbox.x0
+  );
+
+  const rows = [];
+  for (const word of sorted) {
+    const centerY = (word.bbox.y0 + word.bbox.y1) / 2;
+    let row = rows.find(candidate => Math.abs(candidate.centerY - centerY) <= medianHeight * 0.65);
+    if (!row) {
+      row = { centerY, words: [] };
+      rows.push(row);
+    }
+    row.words.push(word);
+    row.centerY = row.words.reduce((sum, item) =>
+      sum + (item.bbox.y0 + item.bbox.y1) / 2, 0) / row.words.length;
+  }
+
+  const outputRows = rows.sort((a, b) => a.centerY - b.centerY).map(row => {
+    const lineWords = row.words.sort((a, b) => a.bbox.x0 - b.bbox.x0);
+    const cells = [];
+    let current = "";
+    let previousRight = null;
+    const widths = lineWords.map(word => Math.max(1, word.bbox.x1 - word.bbox.x0));
+    const typicalWidth = widths.sort((a, b) => a - b)[Math.floor(widths.length / 2)];
+    const gapThreshold = Math.max(medianHeight * 1.15, typicalWidth * 1.4);
+    for (const word of lineWords) {
+      const gap = previousRight === null ? 0 : word.bbox.x0 - previousRight;
+      if (current && gap > gapThreshold) {
+        cells.push(current.trim());
+        current = "";
+      }
+      current += (current ? " " : "") + word.text;
+      previousRight = word.bbox.x1;
+    }
+    if (current) cells.push(current.trim());
+    return cells;
+  });
+
+  const columnCount = Math.max(...outputRows.map(row => row.length));
+  if (columnCount < 2) return "";
+  return outputRows.map(row =>
+    Array.from({ length: columnCount }, (_, index) => (row[index] || "").replace(/\t/g, " "))
+      .join("\t")
+  ).join("\n");
+}
+
+$("table").addEventListener("click", () => {
+  if (!lastOcrData) {
+    $("status").textContent = "먼저 이미지를 선택하고 문자 추출을 실행해 주세요.";
+    return;
+  }
+  const tableText = extractTableText(lastOcrData);
+  if (!tableText) {
+    $("status").textContent = "표의 열 구분을 찾지 못했습니다. 원본 표가 선명하고 열 간격이 충분한지 확인해 주세요.";
+    return;
+  }
+  $("output").value = tableText;
+  $("status").textContent = "표 형태로 변환했습니다. 열 구분은 글자 위치를 이용한 자동 추정이므로 결과를 확인해 주세요.";
+});
+
+$("pdf").addEventListener("click", () => {
+  const value = $("output").value;
+  if (!value.trim()) {
+    $("status").textContent = "PDF로 저장할 내용이 없습니다.";
+    return;
+  }
+  const printWindow = window.open("", "_blank");
+  if (!printWindow) {
+    $("status").textContent = "새 창이 차단되었습니다. 브라우저의 팝업 허용 후 다시 시도해 주세요.";
+    return;
+  }
+  const safeText = value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  printWindow.document.open();
+  printWindow.document.write(`<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><title>OCR 추출 결과</title>
+<style>
+@page{size:A4;margin:18mm}
+body{font-family:Arial,"Noto Sans KR",sans-serif;color:#202124;font-size:11pt;line-height:1.65}
+h1{font-size:16pt;margin:0 0 18px}
+pre{font:inherit;white-space:pre-wrap;overflow-wrap:anywhere;margin:0}
+</style></head><body><h1>OCR 추출 결과</h1><pre>${safeText}</pre>
+<script>window.onload=()=>{window.focus();window.print();};<\/script>
+</body></html>`);
+  printWindow.document.close();
+  $("status").textContent = "인쇄 창을 열었습니다. 인쇄 대상에서 PDF로 저장을 선택해 주세요.";
 });
 
 $("save").addEventListener("click", () => {
