@@ -80,7 +80,7 @@
       Math.round(x0 + 2), Math.round(y0 + 2), width, height
     ).data;
 
-    const slopes = [0.32, 0.36, 0.40, 0.44, 0.48, -0.32, -0.36, -0.40, -0.44, -0.48];
+    const slopes = [0.36, 0.40, 0.44, -0.36, -0.40, -0.44];
     for (const slope of slopes) {
       for (let intercept = -Math.ceil(width * Math.abs(slope)) - height; intercept <= height; intercept += 2) {
         let samples = 0;
@@ -103,7 +103,7 @@
           }
           if (hit) dark++;
         }
-        if (samples >= width * 0.2 && dark / samples >= 0.8) return true;
+        if (samples >= width * 0.1 && dark / samples >= 0.8) return true;
       }
     }
     return false;
