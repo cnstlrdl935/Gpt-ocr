@@ -62,15 +62,26 @@
     );
     if (xCandidates.length < 3) return null;
 
+    const xGaps = xCandidates.slice(1).map((x, index) => x - xCandidates[index]).sort((a, b) => a - b);
+    const yGaps = yCandidates.slice(1).map((y, index) => y - yCandidates[index]).sort((a, b) => a - b);
+    const medianXGap = xGaps.length ? xGaps[Math.floor(xGaps.length / 2)] : 8;
+    const medianYGap = yGaps.length ? yGaps[Math.floor(yGaps.length / 2)] : 8;
+    const xRadius = Math.min(12, Math.max(2, Math.round(medianXGap * 0.25)));
+    const yRadius = Math.min(12, Math.max(2, Math.round(medianYGap * 0.25)));
+
     function isIntersection(x, y) {
       const xi = Math.round(x);
       const yi = Math.round(y);
+      const top = Math.max(0, yi - yRadius);
+      const bottom = Math.min(height - 1, yi + yRadius);
+      const left = Math.max(0, xi - xRadius);
+      const right = Math.min(width - 1, xi + xRadius);
       let verticalHits = 0;
       let horizontalHits = 0;
 
-      // A rule must continue in both directions. This rejects text strokes
-      // that merely touch a candidate row or column.
-      for (let yy = Math.max(0, yi - 12); yy <= Math.min(height - 1, yi + 12); yy++) {
+      // Scale the test window to the table's actual cell spacing. This keeps
+      // small tables detectable without mistaking nearby text for grid lines.
+      for (let yy = top; yy <= bottom; yy++) {
         let hit = false;
         for (let xx = Math.max(0, xi - 1); xx <= Math.min(width - 1, xi + 1); xx++) {
           if (pixelIsDark(data, (yy * width + xx) * 4, 205)) {
@@ -80,7 +91,7 @@
         }
         if (hit) verticalHits++;
       }
-      for (let xx = Math.max(0, xi - 12); xx <= Math.min(width - 1, xi + 12); xx++) {
+      for (let xx = left; xx <= right; xx++) {
         let hit = false;
         for (let yy = Math.max(0, yi - 1); yy <= Math.min(height - 1, yi + 1); yy++) {
           if (pixelIsDark(data, (yy * width + xx) * 4, 205)) {
@@ -90,7 +101,8 @@
         }
         if (hit) horizontalHits++;
       }
-      return verticalHits >= 14 && horizontalHits >= 13;
+      return verticalHits >= (bottom - top + 1) * 0.52 &&
+        horizontalHits >= (right - left + 1) * 0.52;
     }
 
     // Build a bipartite graph of horizontal and vertical rules. A page frame
