@@ -258,21 +258,22 @@ async function extractOfficeOrText(file) {
     const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
     return workbook.SheetNames.map(name => {
       const sheet = workbook.Sheets[name];
-      return "[시트: " + name + "]\\n" + XLSX.utils.sheet_to_csv(sheet, { FS: "\\t" });
-    }).join("\\n\\n");
+      return "[시트: " + name + "]\n" + XLSX.utils.sheet_to_csv(sheet, { FS: "\t" });
+    }).join("\n\n");
   }
   if (ext === "pptx") {
     if (!window.JSZip) throw new Error("PPTX 처리 라이브러리를 불러오지 못했습니다.");
     const zip = await JSZip.loadAsync(await file.arrayBuffer());
-    const slideNames = Object.keys(zip.files).filter(name => /^ppt\\/slides\\/slide\\d+\\.xml$/.test(name))
-      .sort((a, b) => Number(a.match(/slide(\\d+)/)[1]) - Number(b.match(/slide(\\d+)/)[1]));
+    const slideNames = Object.keys(zip.files)
+      .filter(name => /^ppt\/slides\/slide\d+\.xml$/.test(name))
+      .sort((a, b) => Number(a.match(/slide(\d+)/)[1]) - Number(b.match(/slide(\d+)/)[1]));
     const slides = [];
     for (const name of slideNames) {
       const xml = new DOMParser().parseFromString(await zip.files[name].async("text"), "application/xml");
       const textRuns = [...xml.getElementsByTagName("a:t")].map(node => node.textContent || "");
-      slides.push("[슬라이드 " + name.match(/slide(\\d+)/)[1] + "]\\n" + textRuns.join(""));
+      slides.push("[슬라이드 " + name.match(/slide(\d+)/)[1] + "]\n" + textRuns.join(""));
     }
-    return slides.join("\\n\\n");
+    return slides.join("\n\n");
   }
   return null;
 }
