@@ -14,7 +14,7 @@
     // relative to this table ROI, not the entire page height.
     const horizontal=runs(Array.from({length:height},(_,y)=>y).filter(y=>rowCounts[y]>=Math.max(18,width*.42)),Math.max(2,Math.round(height/1200)));
     if(horizontal.length<3)return null;
-    const groups=groupRows(horizontal,Math.max(36,height*.075));
+    const groups=groupRows(horizontal,Math.max(36,height*.15));
     const table=groups.filter(g=>g.length>=3&&g[g.length-1]-g[0]>=Math.max(30,height*.025))
       .sort((a,b)=>(b.length*(b[b.length-1]-b[0]))-(a.length*(a[a.length-1]-a[0])))[0];
     if(!table)return null;
@@ -22,8 +22,20 @@
     if(tableHeight<30)return null;
     const columnCounts=new Uint32Array(width);
     for(let y=Math.max(0,Math.floor(top));y<=Math.min(height-1,Math.ceil(bottom));y++){const off=y*width*4;for(let x=0;x<width;x++){const i=off+x*4;if(.299*data[i]+.587*data[i+1]+.114*data[i+2]<205)columnCounts[x]++;}}
-    let xs=runs(Array.from({length:width},(_,x)=>x).filter(x=>columnCounts[x]>=Math.max(12,tableHeight*.62)),Math.max(2,Math.round(width/1200)));
+    let xs=runs(Array.from({length:width},(_,x)=>x).filter(x=>columnCounts[x]>=Math.max(12,tableHeight*.62)),Math.max(3,Math.round(width/300)));
     if(xs.length<3)return null;
+    // A page frame can sit just outside the actual table and create two
+    // narrow gutters. Remove both outer candidates together, using the
+    // median interior column spacing so a genuinely narrow first column stays.
+    if(xs.length>=4){
+      const gaps=xs.slice(1).map((x,i)=>x-xs[i]);
+      const sorted=gaps.slice().sort((a,b)=>a-b);
+      const medianGap=sorted[Math.floor(sorted.length/2)];
+      const trimLeft=gaps[0]<medianGap*.4;
+      const trimRight=gaps[gaps.length-1]<medianGap*.4;
+      if(trimLeft)xs=xs.slice(1);
+      if(trimRight)xs=xs.slice(0,-1);
+    }
     const intersects=(x,y)=>{const xi=Math.round(x),yi=Math.round(y);let hs=0,vs=0;
       for(let yy=Math.max(0,yi-2);yy<=Math.min(height-1,yi+2);yy++)for(let xx=Math.max(0,xi-12);xx<=Math.min(width-1,xi+12);xx++){const i=(yy*width+xx)*4;if(.299*data[i]+.587*data[i+1]+.114*data[i+2]<205)hs++;}
       for(let xx=Math.max(0,xi-2);xx<=Math.min(width-1,xi+2);xx++)for(let yy=Math.max(0,yi-12);yy<=Math.min(height-1,yi+12);yy++){const i=(yy*width+xx)*4;if(.299*data[i]+.587*data[i+1]+.114*data[i+2]<205)vs++;}
