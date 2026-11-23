@@ -100,12 +100,12 @@ footer p{font-size:11px;color:#9a9ca1;line-height:1.6}footer .version{margin-top
 
 <footer>
 <p class="hint">인식률 개선을 위해 이미지 확대와 명암 보정을 적용합니다. 작은 글씨, 흐린 글씨, 특수 기호는 원본 이미지에 따라 정확도가 달라질 수 있습니다. 최초 실행 시 OCR 엔진과 언어 데이터를 인터넷에서 내려받습니다.</p>
-<p class="version">버전 v1.0.0 · OCR 엔진 Tesseract.js 5.1.1</p>
+<p class="version">버전 v1.1.0 · OCR 엔진 Tesseract.js 5.1.1</p>
 </footer>
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
-<script src="./table-structure.js?v=v1.0.0"></script>
+<script src="./table-structure.js?v=v1.1.0"></script>
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
@@ -280,7 +280,7 @@ $("run").addEventListener("click", async () => {
       ? window.TableStructureDetector.detectGrid(lastOcrCanvas)
       : null;
     if (grid) {
-      const tableResult = await recognizeTableCells(worker, lastOcrCanvas, grid, fullText);
+      const tableResult = await recognizeTableCells(worker, lastOcrCanvas, grid);
       if (tableResult.ok) {
         lastTableText = tableResult.text;
         const title = fullText.split(/\r?\n/).map(line => line.trim()).filter(Boolean).slice(0, 2).join("\n");
@@ -388,134 +388,36 @@ function makeAdaptiveCellCanvas(source, x0, y0, x1, y1) {
   return canvas;
 }
 
-function normalizeCellText(value, columnIndex, rowIndex, examLayout) {
-  let text = (value || "").replace(/[ \t]*\r?\n[ \t]*/g, " ").replace(/[ \t]{2,}/g, " ").trim();
-  text = text.replace(/(\d{1,3}-\d{1,3})(?:쪽|[%3])?/g, "$1쪽");
-  text = text.replace("해당 범위 학습지 전제", "해당 범위 학습지 전체");
-  text = text.replace("생식과 9.41", "생식과 유전");
-  text = text.replace(/쪽[34%](?=[),\\s]|$)/g, "쪽");
-  if (examLayout) {
-    text = text.replace("국민 경재와 국제 거래", "국민 경제와 국제 거래");
-    text = text.replace("교과서 ㆍ", "교과서");
-  }
-  if (examLayout && rowIndex === 1 && columnIndex === 3) {
-    text = text.replace("VL 다양한", "VIII. 다양한").replace("×. 정치", "X. 정치");
-  }
-  if (examLayout && rowIndex === 1 && columnIndex === 6) {
-    text = text.replace("\\\\. 국민", "V. 국민").replace("Va. 사람이", "VIII. 사람이")
-      .replace("×. 환경", "X. 환경").replace("Mi. 세계", "XI. 세계");
-  }
-  if (examLayout && rowIndex === 3 && columnIndex === 3) {
-    text = text.replace("lV.", "IV.").replace("VL 기체", "VI. 기체");
-  }
-  if (examLayout && rowIndex === 3 && columnIndex === 6) {
-    text = text.replace("VI. 별과 우주", "VII. 별과 우주");
-  }
-  if (columnIndex === 0) {
-    const korean = text.match(/[가-힣]+/g);
-    text = korean ? korean.join(" ") : "";
-  } else if (columnIndex === 1 || columnIndex === 2 || columnIndex === 4 || columnIndex === 5) {
-    text = text.replace(/\s+/g, "");
-  }
-  return text;
+function normalizeCellText(value) {
+  return (value || "").replace(/[ \\t]+/g, " ").replace(/ *\\n */g, "\\n").trim();
 }
 
-async function recognizeScoreBlock(worker, source, x0, x1, bodyYs, splitX, leftColumn, rightColumn) {
-  const scores = {};
-  const blockCanvas = makeAdaptiveCellCanvas(source, x0, bodyYs[0], x1, bodyYs[bodyYs.length - 1]);
-  await worker.setParameters({ tessedit_pageseg_mode: "6", preserve_interword_spaces: "1" });
-  const result = await worker.recognize(blockCanvas);
-  const scale = 3;
-  const words = Array.isArray(result.data.words) ? result.data.words : [];
-  for (const word of words) {
-    if (!word || !word.bbox || typeof word.text !== "string") continue;
-    const number = word.text.match(/\d{1,3}/);
-    if (!number) continue;
-    const centerX = x0 + 2 + ((word.bbox.x0 + word.bbox.x1) / 2) / scale;
-    const centerY = bodyYs[0] + 2 + ((word.bbox.y0 + word.bbox.y1) / 2) / scale;
-    const row = bodyYs.findIndex((y, index) =>
-      index < bodyYs.length - 1 && centerY >= y && centerY < bodyYs[index + 1]
-    );
-    if (row < 0) continue;
-    const column = centerX < splitX ? leftColumn : rightColumn;
-    scores[row + ":" + column] = number[0] + "점";
-  }
-  return scores;
-}
-
-async function recognizeTableCells(worker, source, grid, fullText) {
-  if (!grid || !Array.isArray(grid.xs) || !Array.isArray(grid.ys)) {
-    return { ok: false, reason: "표의 행과 열 경계선을 충분히 검출하지 못했습니다." };
-  }
-  const xs = grid.xs;
-  const ys = grid.ys;
-  const start = Math.max(0, grid.bodyStartIndex);
-  const bodyYs = ys.slice(start);
-  if (xs.length < 3 || bodyYs.length < 3) {
-    return { ok: false, reason: "표 본문에서 행과 열을 찾지 못했습니다." };
-  }
-
-  const rowCount = bodyYs.length - 1;
-  const columnCount = xs.length - 1;
-  const examLayout = columnCount === 7 && rowCount === 7
-    && (fullText || "").includes("1학년") && (fullText || "").includes("3학년");
-  const headings = examLayout
-    ? ["교과", "1학년 선택형", "1학년 논술형", "1학년 시험 범위", "3학년 선택형", "3학년 논술형", "3학년 시험 범위"]
-    : Array.from({ length: columnCount }, (_, index) => "열 " + (index + 1));
-  const rows = [headings];
-  let scoreMap = {};
-  if (examLayout) {
-    $("status").textContent = "선택형·논술형 배점 칸을 인식하고 있습니다.";
-    const firstGradeScores = await recognizeScoreBlock(worker, source, xs[1], xs[3], bodyYs, xs[2], 1, 2);
-    const thirdGradeScores = await recognizeScoreBlock(worker, source, xs[4], xs[6], bodyYs, xs[5], 4, 5);
-    scoreMap = { ...firstGradeScores, ...thirdGradeScores };
-  }
-
-  for (let row = 0; row < rowCount; row++) {
-    const cells = [];
-    const y0 = bodyYs[row];
-    const y1 = bodyYs[row + 1];
-    // Detect a diagonal divider once across the first-grade block. This avoids
-    // interpreting the long diagonal rule as stray letters in its individual cells.
-    const firstGradeBlockHasDiagonal = examLayout
-      && window.TableStructureDetector.isDiagonalDivider(source, xs[1], y0, xs[4], y1);
-
-    for (let column = 0; column < columnCount; column++) {
-      $("status").textContent = "표 셀을 개별 인식하고 있습니다. " + (row + 1) + "/" + rowCount + "행, " + (column + 1) + "/" + columnCount + "열";
-      const x0 = xs[column];
-      const x1 = xs[column + 1];
-
-      if (firstGradeBlockHasDiagonal && column >= 1 && column <= 3) {
-        cells.push("");
-        continue;
-      }
-
-      let bestText = "";
-      const isScoreColumn = column === 1 || column === 2 || column === 4 || column === 5;
-      if (isScoreColumn && examLayout) bestText = scoreMap[row + ":" + column] || "";
-
-      // The score columns are recognized as two compact blocks; other cells are OCRed individually.
-      if (!bestText) {
-        const cellCanvas = makeAdaptiveCellCanvas(source, x0, y0, x1, y1);
-        const narrowCell = (x1 - x0) < 80;
-        await worker.setParameters({
-          tessedit_pageseg_mode: narrowCell ? "6" : "4",
-          preserve_interword_spaces: "1"
-        });
-        const result = await worker.recognize(cellCanvas);
-        bestText = result.data.text || "";
-      }
-      cells.push(normalizeCellText(bestText, column, row, examLayout));
+async function recognizeTableCells(worker, source, grid) {
+  if(!grid||!Array.isArray(grid.xs)||!Array.isArray(grid.ys))return {ok:false,reason:"표의 격자선을 충분히 검출하지 못했습니다."};
+  const xs=grid.xs,ys=grid.ys,rowCount=ys.length-1;
+  if(rowCount<2||xs.length<3)return {ok:false,reason:"표의 행 또는 열 경계가 부족합니다."};
+  const rows=[];
+  for(let row=0;row<rowCount;row++){
+    const y0=ys[row],y1=ys[row+1],groups=[];
+    let groupStart=0;
+    for(let boundary=1;boundary<xs.length-1;boundary++){
+      if(window.TableStructureDetector.hasVerticalBoundary(source,xs[boundary],y0,y1)){groups.push([groupStart,boundary]);groupStart=boundary;}
+    }
+    groups.push([groupStart,xs.length-1]);
+    const cells=[];
+    for(const [left,right] of groups){
+      $("status").textContent="표 셀을 인식하고 있습니다. "+(row+1)+"/"+rowCount+"행";
+      const cellCanvas=makeAdaptiveCellCanvas(source,xs[left],y0,xs[right],y1);
+      await worker.setParameters({tessedit_pageseg_mode:"6",preserve_interword_spaces:"1",user_defined_dpi:"300"});
+      const result=await worker.recognize(cellCanvas);
+      cells.push(normalizeCellText(result.data.text));
     }
     rows.push(cells);
   }
-
-  return {
-    ok: true,
-    rowCount,
-    columnCount,
-    text: rows.map(row => row.join("\t")).join("\n")
-  };
+  const maxColumns=Math.max(...rows.map(r=>r.length));
+  const normalized=rows.map(row=>Array.from({length:maxColumns},(_,i)=>row[i]||""));
+  if(normalized.flat().filter(Boolean).length<Math.max(2,Math.floor(rowCount*.5)))return {ok:false,reason:"표의 셀에서 충분한 문자를 인식하지 못했습니다."};
+  return {ok:true,rowCount,columnCount:maxColumns,text:normalized.map(r=>r.join("\\t")).join("\\n")};
 }
 
 function renderTablePreview(value) {
