@@ -14,10 +14,23 @@
     // relative to this table ROI, not the entire page height.
     const horizontal=runs(Array.from({length:height},(_,y)=>y).filter(y=>rowCounts[y]>=Math.max(18,width*.42)),Math.max(2,Math.round(height/1200)));
     if(horizontal.length<3)return null;
-    const groups=groupRows(horizontal,Math.max(36,height*.15));
-    const table=groups.filter(g=>g.length>=3&&g[g.length-1]-g[0]>=Math.max(30,height*.025))
+    const horizontalGaps=horizontal.slice(1).map((y,i)=>y-horizontal[i]);
+    const sortedHorizontalGaps=horizontalGaps.slice().sort((a,b)=>a-b);
+    const medianRowGap=sortedHorizontalGaps.length?sortedHorizontalGaps[Math.floor(sortedHorizontalGaps.length/2)]:0;
+    const groups=groupRows(horizontal,Math.max(36,medianRowGap*2.5));
+    let table=groups.filter(g=>g.length>=3&&g[g.length-1]-g[0]>=Math.max(30,height*.025))
       .sort((a,b)=>(b.length*(b[b.length-1]-b[0]))-(a.length*(a[a.length-1]-a[0])))[0];
     if(!table)return null;
+    if(table.length>=4){
+      const rowGaps=table.slice(1).map((y,i)=>y-table[i]);
+      const sortedRowGaps=rowGaps.slice().sort((a,b)=>a-b);
+      const typicalRowGap=sortedRowGaps[Math.floor(sortedRowGaps.length/2)];
+      const trimTop=rowGaps[0]<typicalRowGap*.4;
+      const trimBottom=rowGaps[rowGaps.length-1]<typicalRowGap*.4;
+      if(trimTop)table=table.slice(1);
+      if(trimBottom)table=table.slice(0,-1);
+    }
+    if(table.length<3)return null;
     const top=table[0],bottom=table[table.length-1],tableHeight=bottom-top;
     if(tableHeight<30)return null;
     const columnCounts=new Uint32Array(width);
