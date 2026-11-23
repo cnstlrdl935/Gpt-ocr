@@ -67,6 +67,27 @@
     );
     if (xCandidates.length < 3) return null;
 
+    // Remove a nearby page-frame border when it lies at the page edge.
+    // A real narrow table column is retained because its next rule is farther away.
+    if (xCandidates.length >= 4) {
+      if (xCandidates[0] < width * 0.05 &&
+          xCandidates[1] - xCandidates[0] < width * 0.08) xCandidates.shift();
+      if (xCandidates.length >= 4 &&
+          xCandidates[xCandidates.length - 1] > width * 0.95 &&
+          xCandidates[xCandidates.length - 1] - xCandidates[xCandidates.length - 2] < width * 0.08) {
+        xCandidates.pop();
+      }
+    }
+    if (yCandidates.length >= 4) {
+      if (yCandidates[0] < height * 0.05 &&
+          yCandidates[1] - yCandidates[0] < height * 0.10) yCandidates.shift();
+      if (yCandidates.length >= 4 &&
+          yCandidates[yCandidates.length - 1] > height * 0.95 &&
+          yCandidates[yCandidates.length - 1] - yCandidates[yCandidates.length - 2] < height * 0.10) {
+        yCandidates.pop();
+      }
+    }
+
     const xGaps = xCandidates.slice(1).map((x, index) => x - xCandidates[index]).sort((a, b) => a - b);
     const yGaps = yCandidates.slice(1).map((y, index) => y - yCandidates[index]).sort((a, b) => a - b);
     const medianXGap = xGaps.length ? xGaps[Math.floor(xGaps.length / 2)] : 8;
