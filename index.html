@@ -392,10 +392,6 @@ function makeAdaptiveCellCanvas(source, x0, y0, x1, y1) {
   return canvas;
 }
 
-function normalizeCellText(value) {
-  return (value || "").replace(/[ \\t]+/g, " ").replace(/ *\\n */g, "\\n").trim();
-}
-
 async function recognizeTableCells(worker, source, grid) {
   if (!grid || !Array.isArray(grid.xs) || !Array.isArray(grid.ys)) {
     return { ok: false, reason: "표의 격자선을 충분히 검출하지 못했습니다." };
