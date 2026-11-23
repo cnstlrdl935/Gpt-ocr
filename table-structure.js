@@ -17,7 +17,7 @@
     const horizontalGaps=horizontal.slice(1).map((y,i)=>y-horizontal[i]);
     const sortedHorizontalGaps=horizontalGaps.slice().sort((a,b)=>a-b);
     const medianRowGap=sortedHorizontalGaps.length?sortedHorizontalGaps[Math.floor(sortedHorizontalGaps.length/2)]:0;
-    const groups=groupRows(horizontal,Math.max(36,medianRowGap*2.5));
+    const groups=groupRows(horizontal,Math.max(36,medianRowGap*4.5));
     let table=groups.filter(g=>g.length>=3&&g[g.length-1]-g[0]>=Math.max(30,height*.025))
       .sort((a,b)=>(b.length*(b[b.length-1]-b[0]))-(a.length*(a[a.length-1]-a[0])))[0];
     if(!table)return null;
