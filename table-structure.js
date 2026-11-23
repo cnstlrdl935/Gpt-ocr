@@ -61,10 +61,15 @@
   function hasVerticalBoundary(canvas,x,y0,y1){
     const xi=Math.round(x),top=Math.max(0,Math.round(y0+2)),bottom=Math.min(canvas.height-1,Math.round(y1-2));
     if(bottom<=top)return false;
-    const left=Math.max(0,xi-2),right=Math.min(canvas.width-1,xi+2),w=right-left+1,h=bottom-top+1;
+    const left=Math.max(0,xi-1),right=Math.min(canvas.width-1,xi+1),w=right-left+1,h=bottom-top+1;
     const data=canvas.getContext("2d",{willReadFrequently:true}).getImageData(left,top,w,h).data;
-    let dark=0;for(let y=0;y<h;y++)for(let x0=0;x0<w;x0++){const i=(y*w+x0)*4;if(.299*data[i]+.587*data[i+1]+.114*data[i+2]<170)dark++;}
-    return dark>=Math.max(5,h*1.25);
+    let continuousRows=0;
+    for(let y=0;y<h;y++){
+      let hit=false;
+      for(let x0=0;x0<w;x0++){const i=(y*w+x0)*4;if(.299*data[i]+.587*data[i+1]+.114*data[i+2]<170){hit=true;break;}}
+      if(hit)continuousRows++;
+    }
+    return continuousRows>=Math.max(4,h*.62);
   }
   root.TableStructureDetector=Object.freeze({detectGrid,hasVerticalBoundary});
 })(window);
