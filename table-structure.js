@@ -24,40 +24,45 @@
 
     const data = canvas.getContext("2d", { willReadFrequently: true })
       .getImageData(0, 0, width, height).data;
-    const rowCounts = new Uint32Array(height);
+    // Use contiguous line length rather than total dark pixels per row/column.
+    // Text baselines can have many dark pixels, but rarely form a long continuous rule.
+    const horizontalCandidates = [];
     for (let y = 0; y < height; y++) {
-      let count = 0;
+      let run = 0;
+      let longest = 0;
       const offset = y * width * 4;
       for (let x = 0; x < width; x++) {
-        if (pixelIsDark(data, offset + x * 4, 205)) count++;
+        if (pixelIsDark(data, offset + x * 4, 205)) {
+          run++;
+          if (run > longest) longest = run;
+        } else {
+          run = 0;
+        }
       }
-      rowCounts[y] = count;
+      if (longest >= Math.max(25, width * 0.30)) horizontalCandidates.push(y);
     }
-
-    // Partial horizontal rules are allowed; text baselines are rejected later
-    // by checking whether a genuine vertical rule continues through each crossing.
     const yCandidates = cluster(
-      Array.from({ length: height }, (_, y) => y)
-        .filter(y => rowCounts[y] >= Math.max(18, width * 0.22)),
+      horizontalCandidates,
       Math.max(2, Math.round(Math.max(width, height) / 1000))
     );
     if (yCandidates.length < 3) return null;
 
-    const yTop = Math.max(0, Math.floor(yCandidates[0]));
-    const yBottom = Math.min(height - 1, Math.ceil(yCandidates[yCandidates.length - 1]));
-    const tableHeight = yBottom - yTop;
-    if (tableHeight < 30) return null;
-
-    const columnCounts = new Uint32Array(width);
-    for (let y = yTop; y <= yBottom; y++) {
-      const offset = y * width * 4;
-      for (let x = 0; x < width; x++) {
-        if (pixelIsDark(data, offset + x * 4, 205)) columnCounts[x]++;
+    const verticalCandidates = [];
+    for (let x = 0; x < width; x++) {
+      let run = 0;
+      let longest = 0;
+      for (let y = 0; y < height; y++) {
+        if (pixelIsDark(data, (y * width + x) * 4, 205)) {
+          run++;
+          if (run > longest) longest = run;
+        } else {
+          run = 0;
+        }
       }
+      if (longest >= Math.max(25, height * 0.03)) verticalCandidates.push(x);
     }
     const xCandidates = cluster(
-      Array.from({ length: width }, (_, x) => x)
-        .filter(x => columnCounts[x] >= Math.max(12, tableHeight * 0.35)),
+      verticalCandidates,
       Math.max(2, Math.round(Math.max(width, height) / 1000))
     );
     if (xCandidates.length < 3) return null;
