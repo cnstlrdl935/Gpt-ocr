@@ -329,10 +329,37 @@ $("run").addEventListener("click", async () => {
       preserve_interword_spaces: "1",
       user_defined_dpi: "300"
     });
+    let ocrImage;
+    let result;
+    if (extension === "pdf") {
+      if (!window.pdfjsLib) throw new Error("PDF 처리 라이브러리를 불러오지 못했습니다.");
+      pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+      const pdf = await pdfjsLib.getDocument({ data: await selectedFile.arrayBuffer() }).promise;
+      const pages = [];
+      for (let pageNo = 1; pageNo <= pdf.numPages; pageNo++) {
+        $("status").textContent = "PDF " + pageNo + "/" + pdf.numPages + "페이지를 OCR 처리하고 있습니다.";
+        const page = await pdf.getPage(pageNo);
+        const viewport = page.getViewport({ scale: 1.8 });
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.ceil(viewport.width);
+        canvas.height = Math.ceil(viewport.height);
+        await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+        const pageResult = await worker.recognize(canvas);
+        pages.push("[페이지 " + pageNo + "]\\n" + (pageResult.data.text || "").trim());
+        $("progress").value = pageNo / pdf.numPages;
+      }
+      $("output").value = pages.join("\\n\\n").trim() || "인식된 문자가 없습니다.";
+      lastOcrData = lastOcrCanvas = lastTableText = lastTableResult = null;
+      $("table-preview").hidden = true;
+      $("table-preview").replaceChildren();
+      $("status").textContent = "PDF " + pdf.numPages + "페이지의 OCR 처리가 완료되었습니다.";
+      $("progress").value = 1;
+      return;
+    }
     $("status").textContent = "이미지 선명도와 명암을 보정하고 있습니다.";
-    const ocrImage = await prepareImageForOcr(selectedFile);
+    ocrImage = await prepareImageForOcr(selectedFile);
     $("status").textContent = "문자와 기호를 인식하고 있습니다.";
-    let result = await worker.recognize(ocrImage.blob);
+    result = await worker.recognize(ocrImage.blob);
     // Keep automatic page segmentation; confidence alone cannot select a better layout.
     lastOcrData = result.data;
     lastOcrCanvas = ocrImage.canvas;
