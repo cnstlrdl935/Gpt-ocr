@@ -203,6 +203,7 @@ function useSelectedImage(file) {
   lastOcrData = null;
   lastOcrCanvas = null;
   lastTableText = null;
+  lastTableResult = null;
   $("table-preview").hidden = true;
   $("table-preview").replaceChildren();
   $("progress").value = 0;
@@ -275,6 +276,7 @@ $("run").addEventListener("click", async () => {
     const fullText = (result.data.text || "").trim();
     $("output").value = fullText || "인식된 문자가 없습니다. 더 선명한 이미지로 다시 시도해 주세요.";
     lastTableText = null;
+    lastTableResult = null;
     $("table-preview").hidden = true;
     $("table-preview").replaceChildren();
 
@@ -285,9 +287,9 @@ $("run").addEventListener("click", async () => {
       const tableResult = await recognizeTableCells(worker, lastOcrCanvas, grid);
       if (tableResult.ok) {
         lastTableText = tableResult.text;
-        const title = fullText.split(/\r?\n/).map(line => line.trim()).filter(Boolean).slice(0, 2).join("\n");
-        $("output").value = [title, lastTableText].filter(Boolean).join("\n\n");
-        renderTablePreview(lastTableText);
+        lastTableResult = tableResult;
+        $("output").value = lastTableText;
+        renderTablePreview(lastTableResult);
         $("status").textContent = "표 구조 인식 완료: " + tableResult.rowCount + "개 행, " + tableResult.columnCount + "개 열입니다. 각 셀을 따로 인식했습니다.";
       } else {
         $("output").value = fullText || "인식된 문자가 없습니다. 더 선명한 이미지로 다시 시도해 주세요.";
@@ -508,11 +510,11 @@ $("table").addEventListener("click", () => {
     $("status").textContent = "먼저 이미지 선택 후 문자 추출을 실행해 주세요.";
     return;
   }
-  if (!lastTableText) {
+  if (!lastTableResult) {
     $("status").textContent = "이 이미지에서는 표 격자 인식 결과가 없습니다. 일반 OCR 결과는 유지됩니다.";
     return;
   }
-  renderTablePreview(lastTableText);
+  renderTablePreview(lastTableResult);
   $("status").textContent = "셀 단위로 인식한 표를 표시했습니다.";
 });
 
