@@ -267,7 +267,13 @@ $("run").addEventListener("click", async () => {
     $("status").textContent = "이미지 선명도와 명암을 보정하고 있습니다.";
     const ocrImage = await prepareImageForOcr(selectedFile);
     $("status").textContent = "문자와 기호를 인식하고 있습니다.";
-    const result = await worker.recognize(ocrImage.blob);
+    let result = await worker.recognize(ocrImage.blob);
+    // Retry with single-column layout analysis when automatic analysis is weak.
+    if (typeof result.data.confidence === "number" && result.data.confidence < 88.5) {
+      await worker.setParameters({ tessedit_pageseg_mode: "4", preserve_interword_spaces: "1" });
+      const retry = await worker.recognize(ocrImage.blob);
+      if (typeof retry.data.confidence === "number" && retry.data.confidence > result.data.confidence) result = retry;
+    }
     lastOcrData = result.data;
     lastOcrCanvas = ocrImage.canvas;
     const fullText = (result.data.text || "").trim();
@@ -394,30 +400,30 @@ function normalizeCellText(value) {
 
 async function recognizeTableCells(worker, source, grid) {
   if(!grid||!Array.isArray(grid.xs)||!Array.isArray(grid.ys))return {ok:false,reason:"표의 격자선을 충분히 검출하지 못했습니다."};
-  const xs=grid.xs,ys=grid.ys,rowCount=ys.length-1;
-  if(rowCount<2||xs.length<3)return {ok:false,reason:"표의 행 또는 열 경계가 부족합니다."};
+  const xs=grid.xs,ys=grid.ys,rowCount=ys.length-1,columnCount=xs.length-1;
+  if(rowCount<2||columnCount<2)return {ok:false,reason:"표의 행 또는 열 경계가 부족합니다."};
   const rows=[];
   for(let row=0;row<rowCount;row++){
-    const y0=ys[row],y1=ys[row+1],groups=[];
+    const y0=ys[row],y1=ys[row+1],cells=Array(columnCount).fill("");
     let groupStart=0;
-    for(let boundary=1;boundary<xs.length-1;boundary++){
-      if(window.TableStructureDetector.hasVerticalBoundary(source,xs[boundary],y0,y1)){groups.push([groupStart,boundary]);groupStart=boundary;}
-    }
-    groups.push([groupStart,xs.length-1]);
-    const cells=[];
-    for(const [left,right] of groups){
-      $("status").textContent="표 셀을 인식하고 있습니다. "+(row+1)+"/"+rowCount+"행";
-      const cellCanvas=makeAdaptiveCellCanvas(source,xs[left],y0,xs[right],y1);
-      await worker.setParameters({tessedit_pageseg_mode:"6",preserve_interword_spaces:"1",user_defined_dpi:"300"});
-      const result=await worker.recognize(cellCanvas);
-      cells.push(normalizeCellText(result.data.text));
+    for(let boundary=1;boundary<=columnCount;boundary++){
+      const isEnd=boundary===columnCount;
+      const hasRule=!isEnd&&window.TableStructureDetector.hasVerticalBoundary(source,xs[boundary],y0,y1);
+      if(isEnd||hasRule){
+        $("status").textContent="표 셀을 인식하고 있습니다. "+(row+1)+"/"+rowCount+"행";
+        const cellCanvas=makeAdaptiveCellCanvas(source,xs[groupStart],y0,xs[boundary],y1);
+        await worker.setParameters({tessedit_pageseg_mode:"6",preserve_interword_spaces:"1",user_defined_dpi:"300"});
+        const cellResult=await worker.recognize(cellCanvas);
+        cells[groupStart]=normalizeCellText(cellResult.data.text);
+        // Keep merged cells in their original column positions.
+        groupStart=boundary;
+      }
     }
     rows.push(cells);
   }
-  const maxColumns=Math.max(...rows.map(r=>r.length));
-  const normalized=rows.map(row=>Array.from({length:maxColumns},(_,i)=>row[i]||""));
-  if(normalized.flat().filter(Boolean).length<Math.max(2,Math.floor(rowCount*.5)))return {ok:false,reason:"표의 셀에서 충분한 문자를 인식하지 못했습니다."};
-  return {ok:true,rowCount,columnCount:maxColumns,text:normalized.map(r=>r.join("\\t")).join("\\n")};
+  const nonEmpty=rows.flat().filter(Boolean).length;
+  if(nonEmpty<Math.max(2,Math.floor(rowCount*.5)))return {ok:false,reason:"표의 셀에서 충분한 문자를 인식하지 못했습니다."};
+  return {ok:true,rowCount,columnCount,text:rows.map(r=>r.join("\t")).join("\n")};
 }
 
 function renderTablePreview(value) {
