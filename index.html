@@ -62,15 +62,15 @@ footer p{font-size:11px;color:#9a9ca1;line-height:1.6}footer .version{margin-top
 <div class="brand"><span class="brand-mark">T</span><span class="brand-name">TEXT SCANNER</span></div>
 <p class="eyebrow">IMAGE TO TEXT</p>
 <h1>이미지에서 텍스트 추출</h1>
-<p>이미지 파일에 있는 한국어와 영어 문자를 추출합니다.</p>
+<p>이미지와 PDF의 문자를 인식하고 Office 및 텍스트 문서에서 내용을 추출합니다.</p>
 </header>
 
 <section aria-labelledby="image-title">
 <div class="section-head"><span class="step">1</span><h2 id="image-title">이미지 가져오기</h2></div>
 <div class="source-actions" style="grid-template-columns:1fr">
-<button id="open-files" type="button"><span class="source-icon">▤</span><span><span class="source-title">이미지 가져오기</span><span class="source-note">설치된 사진·파일 앱 또는 카메라에서 선택</span></span></button>
+<button id="open-files" type="button"><span class="source-icon">▤</span><span><span class="source-title">파일 가져오기</span><span class="source-note">이미지, PDF, DOCX, XLSX, PPTX, TXT, CSV 지원</span></span></button>
 </div>
-<input id="file" type="file" accept="image/*">
+<input id="file" type="file" accept="image/*,.pdf,.docx,.xlsx,.pptx,.txt,.csv">
 <img id="preview" alt="선택한 이미지 미리보기" hidden>
 
 <label for="language">인식 언어</label>
@@ -104,6 +104,10 @@ footer p{font-size:11px;color:#9a9ca1;line-height:1.6}footer .version{margin-top
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.8.0/mammoth.browser.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="./table-structure.js?v=d69d68a"></script>
 <script>
 "use strict";
@@ -214,17 +218,25 @@ function useSelectedImage(file) {
     $("status").textContent = "선택한 이미지가 없습니다.";
     return;
   }
-  if (!selectedFile.type.startsWith("image/")) {
+  const extension = selectedFile.name.split(".").pop().toLowerCase();
+  const supported = selectedFile.type.startsWith("image/") ||
+    ["pdf", "docx", "xlsx", "pptx", "txt", "csv"].includes(extension);
+  if (!supported) {
     selectedFile = null;
     $("file").value = "";
     $("preview").hidden = true;
-    $("status").textContent = "이미지 파일만 선택할 수 있습니다.";
+    $("status").textContent = "지원하지 않는 파일 형식입니다. 이미지, PDF, DOCX, XLSX, PPTX, TXT, CSV를 선택해 주세요.";
     return;
   }
-  previewUrl = URL.createObjectURL(selectedFile);
-  $("preview").src = previewUrl;
-  $("preview").hidden = false;
-  $("status").textContent = "이미지를 불러왔습니다. 문자 추출을 누르세요.";
+  if (selectedFile.type.startsWith("image/")) {
+    previewUrl = URL.createObjectURL(selectedFile);
+    $("preview").src = previewUrl;
+    $("preview").hidden = false;
+  } else {
+    $("preview").hidden = true;
+    $("preview").removeAttribute("src");
+  }
+  $("status").textContent = selectedFile.name + " 파일을 불러왔습니다. 문자 추출을 누르세요.";
 }
 
 $("file").addEventListener("change", () => {
@@ -233,9 +245,61 @@ $("file").addEventListener("change", () => {
 });
 
 
+async function extractOfficeOrText(file) {
+  const ext = file.name.split(".").pop().toLowerCase();
+  if (ext === "txt" || ext === "csv") return await file.text();
+  if (ext === "docx") {
+    if (!window.mammoth) throw new Error("DOCX 처리 라이브러리를 불러오지 못했습니다.");
+    const result = await window.mammoth.extractRawText({ arrayBuffer: await file.arrayBuffer() });
+    return result.value || "";
+  }
+  if (ext === "xlsx") {
+    if (!window.XLSX) throw new Error("XLSX 처리 라이브러리를 불러오지 못했습니다.");
+    const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
+    return workbook.SheetNames.map(name => {
+      const sheet = workbook.Sheets[name];
+      return "[시트: " + name + "]\\n" + XLSX.utils.sheet_to_csv(sheet, { FS: "\\t" });
+    }).join("\\n\\n");
+  }
+  if (ext === "pptx") {
+    if (!window.JSZip) throw new Error("PPTX 처리 라이브러리를 불러오지 못했습니다.");
+    const zip = await JSZip.loadAsync(await file.arrayBuffer());
+    const slideNames = Object.keys(zip.files).filter(name => /^ppt\\/slides\\/slide\\d+\\.xml$/.test(name))
+      .sort((a, b) => Number(a.match(/slide(\\d+)/)[1]) - Number(b.match(/slide(\\d+)/)[1]));
+    const slides = [];
+    for (const name of slideNames) {
+      const xml = new DOMParser().parseFromString(await zip.files[name].async("text"), "application/xml");
+      const textRuns = [...xml.getElementsByTagName("a:t")].map(node => node.textContent || "");
+      slides.push("[슬라이드 " + name.match(/slide(\\d+)/)[1] + "]\\n" + textRuns.join(""));
+    }
+    return slides.join("\\n\\n");
+  }
+  return null;
+}
+
 $("run").addEventListener("click", async () => {
   if (!selectedFile) {
-    $("status").textContent = "먼저 이미지 파일을 선택해 주세요.";
+    $("status").textContent = "먼저 파일을 선택해 주세요.";
+    return;
+  }
+  const extension = selectedFile.name.split(".").pop().toLowerCase();
+  if (["txt", "csv", "docx", "xlsx", "pptx"].includes(extension)) {
+    const button = $("run");
+    button.disabled = true;
+    try {
+      $("status").textContent = "문서 내용을 추출하고 있습니다.";
+      const text = await extractOfficeOrText(selectedFile);
+      $("output").value = text.trim() || "추출할 텍스트가 없습니다.";
+      $("table-preview").hidden = true;
+      $("table-preview").replaceChildren();
+      lastOcrData = lastOcrCanvas = lastTableText = lastTableResult = null;
+      $("progress").value = 1;
+      $("status").textContent = "문서 텍스트 추출이 완료되었습니다.";
+    } catch (error) {
+      $("status").textContent = "문서 처리 오류: " + (error.message || "알 수 없는 오류");
+    } finally {
+      button.disabled = false;
+    }
     return;
   }
   if (!window.Tesseract) {
