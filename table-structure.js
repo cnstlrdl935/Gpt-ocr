@@ -176,5 +176,31 @@
     return continuousRows >= Math.max(4, sampleHeight * 0.48);
   }
 
-  root.TableStructureDetector = Object.freeze({ detectGrid, hasVerticalBoundary });
+  function hasHorizontalBoundary(canvas, y, x0, x1) {
+    if (!canvas || !canvas.getContext) return false;
+    const yi = Math.round(y);
+    const left = Math.max(0, Math.round(x0 + 2));
+    const right = Math.min(canvas.width - 1, Math.round(x1 - 2));
+    if (right <= left) return false;
+    const sampleWidth = right - left + 1;
+    const top = Math.max(0, yi - 1);
+    const bottom = Math.min(canvas.height - 1, yi + 1);
+    const sampleHeight = bottom - top + 1;
+    const data = canvas.getContext("2d", { willReadFrequently: true })
+      .getImageData(left, top, sampleWidth, sampleHeight).data;
+    let continuousColumns = 0;
+    for (let x = 0; x < sampleWidth; x++) {
+      let hit = false;
+      for (let yy = 0; yy < sampleHeight; yy++) {
+        if (pixelIsDark(data, (yy * sampleWidth + x) * 4, 170)) {
+          hit = true;
+          break;
+        }
+      }
+      if (hit) continuousColumns++;
+    }
+    return continuousColumns >= Math.max(4, sampleWidth * 0.48);
+  }
+
+  root.TableStructureDetector = Object.freeze({ detectGrid, hasVerticalBoundary, hasHorizontalBoundary });
 })(window);
