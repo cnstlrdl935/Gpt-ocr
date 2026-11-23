@@ -99,13 +99,13 @@ footer p{font-size:11px;color:#9a9ca1;line-height:1.6}footer .version{margin-top
 </section>
 
 <footer>
-<p class="hint">인식률 개선을 위해 이미지 확대와 명암 보정을 적용합니다. 작은 글씨, 흐린 글씨, 특수 기호는 원본 이미지에 따라 정확도가 달라질 수 있습니다. 최초 실행 시 OCR 엔진과 언어 데이터를 인터넷에서 내려받습니다.</p>
-<p class="version">버전 v1.2.0 · OCR 엔진 Tesseract.js 5.1.1</p>
+<p class="hint">원본 이미지를 보존해 문자 인식을 수행하며, 표는 셀 단위로 별도 인식합니다. 작은 글씨, 흐린 글씨, 특수 기호는 원본 이미지에 따라 정확도가 달라질 수 있습니다. 최초 실행 시 OCR 엔진과 언어 데이터를 인터넷에서 내려받습니다.</p>
+<p class="version">버전 v1.3.0 · OCR 엔진 Tesseract.js 5.1.1</p>
 </footer>
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
-<script src="./table-structure.js?v=v1.2.0"></script>
+<script src="./table-structure.js?v=v1.3.0"></script>
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
@@ -114,6 +114,7 @@ let previewUrl = null;
 let lastOcrData = null;
 let lastOcrCanvas = null;
 let lastTableText = null;
+let lastTableResult = null;
 
 // 웹에서는 브라우저가 제공하는 이미지 파일 선택 창을 사용합니다.
 $("open-files").addEventListener("click", () => $("file").click());
@@ -268,12 +269,7 @@ $("run").addEventListener("click", async () => {
     const ocrImage = await prepareImageForOcr(selectedFile);
     $("status").textContent = "문자와 기호를 인식하고 있습니다.";
     let result = await worker.recognize(ocrImage.blob);
-    // Retry with single-column layout analysis when automatic analysis is weak.
-    if (typeof result.data.confidence === "number" && result.data.confidence < 88.5) {
-      await worker.setParameters({ tessedit_pageseg_mode: "4", preserve_interword_spaces: "1" });
-      const retry = await worker.recognize(ocrImage.blob);
-      if (typeof retry.data.confidence === "number" && retry.data.confidence > result.data.confidence) result = retry;
-    }
+    // Keep automatic page segmentation; confidence alone cannot select a better layout.
     lastOcrData = result.data;
     lastOcrCanvas = ocrImage.canvas;
     const fullText = (result.data.text || "").trim();
@@ -399,48 +395,100 @@ function normalizeCellText(value) {
 }
 
 async function recognizeTableCells(worker, source, grid) {
-  if(!grid||!Array.isArray(grid.xs)||!Array.isArray(grid.ys))return {ok:false,reason:"표의 격자선을 충분히 검출하지 못했습니다."};
-  const xs=grid.xs,ys=grid.ys,rowCount=ys.length-1,columnCount=xs.length-1;
-  if(rowCount<2||columnCount<2)return {ok:false,reason:"표의 행 또는 열 경계가 부족합니다."};
-  const rows=[];
-  for(let row=0;row<rowCount;row++){
-    const y0=ys[row],y1=ys[row+1],cells=Array(columnCount).fill("");
-    let groupStart=0;
-    for(let boundary=1;boundary<=columnCount;boundary++){
-      const isEnd=boundary===columnCount;
-      const hasRule=!isEnd&&window.TableStructureDetector.hasVerticalBoundary(source,xs[boundary],y0,y1);
-      if(isEnd||hasRule){
-        $("status").textContent="표 셀을 인식하고 있습니다. "+(row+1)+"/"+rowCount+"행";
-        const cellCanvas=makeAdaptiveCellCanvas(source,xs[groupStart],y0,xs[boundary],y1);
-        await worker.setParameters({tessedit_pageseg_mode:"6",preserve_interword_spaces:"1",user_defined_dpi:"300"});
-        const cellResult=await worker.recognize(cellCanvas);
-        cells[groupStart]=normalizeCellText(cellResult.data.text);
-        // Keep merged cells in their original column positions.
-        groupStart=boundary;
-      }
-    }
-    rows.push(cells);
+  if (!grid || !Array.isArray(grid.xs) || !Array.isArray(grid.ys)) {
+    return { ok: false, reason: "표의 격자선을 충분히 검출하지 못했습니다." };
   }
-  const nonEmpty=rows.flat().filter(Boolean).length;
-  if(nonEmpty<Math.max(2,Math.floor(rowCount*.5)))return {ok:false,reason:"표의 셀에서 충분한 문자를 인식하지 못했습니다."};
-  return {ok:true,rowCount,columnCount,text:rows.map(r=>r.join("\t")).join("\n")};
+  const xs = grid.xs;
+  const ys = grid.ys;
+  const rowCount = ys.length - 1;
+  const columnCount = xs.length - 1;
+  if (rowCount < 2 || columnCount < 2) {
+    return { ok: false, reason: "표의 행 또는 열 경계가 부족합니다." };
+  }
+
+  const occupied = Array.from({ length: rowCount }, () => Array(columnCount).fill(false));
+  const tableRows = Array.from({ length: rowCount }, () => []);
+  const textMatrix = Array.from({ length: rowCount }, () => Array(columnCount).fill(""));
+
+  for (let row = 0; row < rowCount; row++) {
+    let column = 0;
+    while (column < columnCount) {
+      if (occupied[row][column]) {
+        column++;
+        continue;
+      }
+
+      let endColumn = column + 1;
+      while (
+        endColumn < columnCount &&
+        !window.TableStructureDetector.hasVerticalBoundary(source, xs[endColumn], ys[row], ys[row + 1])
+      ) {
+        endColumn++;
+      }
+
+      let endRow = row + 1;
+      while (
+        endRow < rowCount &&
+        !window.TableStructureDetector.hasHorizontalBoundary(source, ys[endRow], xs[column], xs[endColumn])
+      ) {
+        endRow++;
+      }
+
+      const colSpan = endColumn - column;
+      const rowSpan = endRow - row;
+      $("status").textContent = "표 셀을 인식하고 있습니다. " + (row + 1) + "/" + rowCount + "행";
+
+      const cellCanvas = makeAdaptiveCellCanvas(source, xs[column], ys[row], xs[endColumn], ys[endRow]);
+      await worker.setParameters({
+        tessedit_pageseg_mode: "6",
+        preserve_interword_spaces: "1",
+        user_defined_dpi: "300"
+      });
+      const cellResult = await worker.recognize(cellCanvas);
+      const cellText = normalizeCellText(cellResult.data.text);
+
+      tableRows[row].push({ text: cellText, colSpan, rowSpan });
+      textMatrix[row][column] = cellText;
+      for (let rr = row; rr < endRow; rr++) {
+        for (let cc = column; cc < endColumn; cc++) occupied[rr][cc] = true;
+      }
+      column = endColumn;
+    }
+  }
+
+  const nonEmpty = textMatrix.flat().filter(Boolean).length;
+  if (nonEmpty < Math.max(2, Math.floor(rowCount * 0.5))) {
+    return { ok: false, reason: "표의 셀에서 충분한 문자를 인식하지 못했습니다." };
+  }
+  return {
+    ok: true,
+    rowCount,
+    columnCount,
+    rows: tableRows,
+    text: textMatrix.map(row => row.join("\t")).join("\n")
+  };
 }
 
-function renderTablePreview(value) {
+function normalizeCellText(value) {
+  return (value || "").replace(/[ \t]+/g, " ").replace(/ *\n */g, "\n").trim();
+}
+
+function renderTablePreview(tableResult) {
   const container = $("table-preview");
-  const rows = value.split("\n").map(row => row.split("\t"));
-  if (!value.includes("\t")) {
+  if (!tableResult || !Array.isArray(tableResult.rows)) {
     container.hidden = true;
     container.replaceChildren();
     return;
   }
   const table = document.createElement("table");
   const body = document.createElement("tbody");
-  rows.forEach((row, rowIndex) => {
+  tableResult.rows.forEach((row, rowIndex) => {
     const tr = document.createElement("tr");
     row.forEach(cell => {
-      const element = document.createElement(rowIndex === 0 ? "th" : "td");
-      element.textContent = cell;
+      const element = document.createElement(rowIndex < 2 ? "th" : "td");
+      element.textContent = cell.text;
+      if (cell.colSpan > 1) element.colSpan = cell.colSpan;
+      if (cell.rowSpan > 1) element.rowSpan = cell.rowSpan;
       tr.appendChild(element);
     });
     body.appendChild(tr);
