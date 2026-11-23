@@ -1,128 +1,45 @@
-/* Table grid detection for OCR. Coordinates are measured on the exact canvas passed by the caller. */
+/* Generic document table-grid detector. No page-size or table-shape assumptions. */
 (function (root) {
   "use strict";
-
-  function clusterRuns(values, gap) {
-    const groups = [];
-    for (const value of values) {
-      const last = groups[groups.length - 1];
-      if (!last || value - last[last.length - 1] > gap) groups.push([value]);
-      else last.push(value);
-    }
-    return groups.map(group => group.reduce((a, b) => a + b, 0) / group.length);
+  function runs(values,gap){const groups=[];for(const v of values){const last=groups[groups.length-1];if(!last||v-last[last.length-1]>gap)groups.push([v]);else last.push(v);}return groups.map(g=>g.reduce((a,b)=>a+b,0)/g.length);}
+  function groupRows(ys,gap){const groups=[];for(const y of ys){const last=groups[groups.length-1];if(!last||y-last[last.length-1]>gap)groups.push([y]);else last.push(y);}return groups;}
+  function detectGrid(canvas){
+    if(!canvas||!canvas.getContext)return null;
+    const width=canvas.width,height=canvas.height;
+    if(!width||!height||width*height>18000000)return null;
+    const data=canvas.getContext("2d",{willReadFrequently:true}).getImageData(0,0,width,height).data;
+    const rowCounts=new Uint32Array(height);
+    for(let y=0;y<height;y++){let n=0,off=y*width*4;for(let x=0;x<width;x++){const i=off+x*4;if(.299*data[i]+.587*data[i+1]+.114*data[i+2]<205)n++;}rowCounts[y]=n;}
+    // Find a dense group of horizontal rules first. All later thresholds are
+    // relative to this table ROI, not the entire page height.
+    const horizontal=runs(Array.from({length:height},(_,y)=>y).filter(y=>rowCounts[y]>=Math.max(18,width*.42)),Math.max(2,Math.round(height/1200)));
+    if(horizontal.length<3)return null;
+    const groups=groupRows(horizontal,Math.max(36,height*.075));
+    const table=groups.filter(g=>g.length>=3&&g[g.length-1]-g[0]>=Math.max(30,height*.025))
+      .sort((a,b)=>(b.length*(b[b.length-1]-b[0]))-(a.length*(a[a.length-1]-a[0])))[0];
+    if(!table)return null;
+    const top=table[0],bottom=table[table.length-1],tableHeight=bottom-top;
+    if(tableHeight<30)return null;
+    const columnCounts=new Uint32Array(width);
+    for(let y=Math.max(0,Math.floor(top));y<=Math.min(height-1,Math.ceil(bottom));y++){const off=y*width*4;for(let x=0;x<width;x++){const i=off+x*4;if(.299*data[i]+.587*data[i+1]+.114*data[i+2]<205)columnCounts[x]++;}}
+    let xs=runs(Array.from({length:width},(_,x)=>x).filter(x=>columnCounts[x]>=Math.max(12,tableHeight*.62)),Math.max(2,Math.round(width/1200)));
+    if(xs.length<3)return null;
+    const intersects=(x,y)=>{const xi=Math.round(x),yi=Math.round(y);let hs=0,vs=0;
+      for(let yy=Math.max(0,yi-2);yy<=Math.min(height-1,yi+2);yy++)for(let xx=Math.max(0,xi-12);xx<=Math.min(width-1,xi+12);xx++){const i=(yy*width+xx)*4;if(.299*data[i]+.587*data[i+1]+.114*data[i+2]<205)hs++;}
+      for(let xx=Math.max(0,xi-2);xx<=Math.min(width-1,xi+2);xx++)for(let yy=Math.max(0,yi-12);yy<=Math.min(height-1,yi+12);yy++){const i=(yy*width+xx)*4;if(.299*data[i]+.587*data[i+1]+.114*data[i+2]<205)vs++;}
+      return hs>=15&&vs>=15;};
+    xs=xs.filter(x=>table.filter(y=>intersects(x,y)).length>=3);
+    const ys=table.filter(y=>xs.filter(x=>intersects(x,y)).length>=3);
+    if(xs.length<3||ys.length<3)return null;
+    return {xs,ys,top:ys[0],bottom:ys[ys.length-1],width,height};
   }
-
-  function detectGrid(canvas) {
-    if (!canvas || !canvas.getContext) return null;
-    const width = canvas.width;
-    const height = canvas.height;
-    if (!width || !height || width * height > 12000000) return null;
-
-    const context = canvas.getContext("2d", { willReadFrequently: true });
-    const pixels = context.getImageData(0, 0, width, height).data;
-    const columns = new Uint32Array(width);
-    const rows = new Uint32Array(height);
-
-    for (let y = 0; y < height; y++) {
-      const offset = y * width * 4;
-      for (let x = 0; x < width; x++) {
-        const i = offset + x * 4;
-        const gray = 0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2];
-        if (gray < 180) {
-          columns[x]++;
-          rows[y]++;
-        }
-      }
-    }
-
-    let xs = clusterRuns(
-      Array.from({ length: width }, (_, x) => x).filter(x => columns[x] >= height * 0.65),
-      Math.max(2, Math.round(width / 500))
-    );
-    let ys = clusterRuns(
-      Array.from({ length: height }, (_, y) => y).filter(y => rows[y] >= width * 0.65),
-      Math.max(2, Math.round(height / 500))
-    );
-    if (xs.length < 3 || ys.length < 3) return null;
-
-    const intersects = (x, y) => {
-      const xi = Math.round(x);
-      const yi = Math.round(y);
-      let horizontalSupport = 0;
-      let verticalSupport = 0;
-      for (let yy = Math.max(0, yi - 1); yy <= Math.min(height - 1, yi + 1); yy++) {
-        let count = 0;
-        for (let xx = Math.max(0, xi - 10); xx <= Math.min(width - 1, xi + 10); xx++) {
-          const i = (yy * width + xx) * 4;
-          if (0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2] < 180) count++;
-        }
-        horizontalSupport = Math.max(horizontalSupport, count);
-      }
-      for (let xx = Math.max(0, xi - 1); xx <= Math.min(width - 1, xi + 1); xx++) {
-        let count = 0;
-        for (let yy = Math.max(0, yi - 10); yy <= Math.min(height - 1, yi + 10); yy++) {
-          const i = (yy * width + xx) * 4;
-          if (0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2] < 180) count++;
-        }
-        verticalSupport = Math.max(verticalSupport, count);
-      }
-      return horizontalSupport >= 6 && verticalSupport >= 6;
-    };
-
-    // Page frames usually meet only at the four corners. Actual table rules
-    // intersect several horizontal and vertical rules.
-    xs = xs.filter(x => ys.filter(y => intersects(x, y)).length >= 3);
-    ys = ys.filter(y => xs.filter(x => intersects(x, y)).length >= 3);
-    if (xs.length < 3 || ys.length < 3) return null;
-
-    const fullWidthRuleIndices = ys
-      .map((y, index) => ({ y, index, support: xs.filter(x => intersects(x, y)).length }))
-      .filter(item => item.support >= xs.length - 1)
-      .map(item => item.index);
-    // The first full-width rule is normally the table's top edge; the next
-    // one closes the header and marks the first body row.
-    const bodyStartIndex = fullWidthRuleIndices.length >= 1 ? fullWidthRuleIndices[0] : 0;
-    return { xs, ys, bodyStartIndex, width, height };
+  function hasVerticalBoundary(canvas,x,y0,y1){
+    const xi=Math.round(x),top=Math.max(0,Math.round(y0+2)),bottom=Math.min(canvas.height-1,Math.round(y1-2));
+    if(bottom<=top)return false;
+    const left=Math.max(0,xi-2),right=Math.min(canvas.width-1,xi+2),w=right-left+1,h=bottom-top+1;
+    const data=canvas.getContext("2d",{willReadFrequently:true}).getImageData(left,top,w,h).data;
+    let dark=0;for(let y=0;y<h;y++)for(let x0=0;x0<w;x0++){const i=(y*w+x0)*4;if(.299*data[i]+.587*data[i+1]+.114*data[i+2]<170)dark++;}
+    return dark>=Math.max(5,h*1.25);
   }
-
-  function isDiagonalDivider(canvas, x0, y0, x1, y1) {
-    const width = Math.floor(x1 - x0 - 4);
-    const height = Math.floor(y1 - y0 - 4);
-    if (width < 20 || height < 20) return false;
-
-    const context = canvas.getContext("2d", { willReadFrequently: true });
-    const data = context.getImageData(
-      Math.round(x0 + 2), Math.round(y0 + 2), width, height
-    ).data;
-
-    const slopes = [0.36, 0.40, 0.44, -0.36, -0.40, -0.44];
-    for (const slope of slopes) {
-      for (let intercept = -Math.ceil(width * Math.abs(slope)) - height; intercept <= height; intercept += 2) {
-        let samples = 0;
-        let dark = 0;
-        for (let x = 0; x < width; x += 2) {
-          const y = Math.round(intercept + slope * x);
-          if (y < 0 || y >= height) continue;
-          samples++;
-          let hit = false;
-          for (let dy = -1; dy <= 1 && !hit; dy++) {
-            const yy = y + dy;
-            if (yy < 0 || yy >= height) continue;
-            for (let dx = -1; dx <= 1; dx++) {
-              const xx = x + dx;
-              if (xx < 0 || xx >= width) continue;
-              const i = (yy * width + xx) * 4;
-              const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-              if (gray < 145) { hit = true; break; }
-            }
-          }
-          if (hit) dark++;
-        }
-        if (samples >= width * 0.1 && dark / samples >= 0.8) return true;
-      }
-    }
-    return false;
-  }
-
-  root.TableStructureDetector = Object.freeze({ detectGrid, isDiagonalDivider });
+  root.TableStructureDetector=Object.freeze({detectGrid,hasVerticalBoundary});
 })(window);
