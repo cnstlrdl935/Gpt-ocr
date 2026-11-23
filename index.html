@@ -379,7 +379,7 @@ function makeAdaptiveCellCanvas(source, x0, y0, x1, y1) {
         - integral[top * stride + right + 1]
         - integral[(bottom + 1) * stride + left]
         + integral[top * stride + left];
-      const threshold = sum / count - 11;
+      const threshold = sum / count - 5;
       const value = gray[y * width + x] < threshold ? 0 : 255;
       const i = (y * width + x) * 4;
       frame.data[i] = value;
